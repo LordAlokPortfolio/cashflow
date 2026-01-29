@@ -199,33 +199,6 @@
     </div>
   </div>
 </div>
-<!-- ADD-ON FEATURES (SAFE APPEND) -->
-<div class="card twelve" id="addons">
-  <h2>Add-ons</h2>
-
-  <div class="grid">
-    <div class="four">
-      <label>What-if purchase date</label>
-      <input id="whatIfDate" type="date">
-    </div>
-    <div class="four">
-      <label>What-if amount</label>
-      <input id="whatIfAmount" type="number" step="0.01">
-    </div>
-    <div class="four">
-      <label>&nbsp;</label>
-      <button id="btnWhatIf" class="primary">Check purchase safety</button>
-    </div>
-  </div>
-
-  <div id="whatIfResult" class="small muted" style="margin-top:8px;"></div>
-
-  <h2 style="margin-top:16px;">Bills Due Before Next Pay</h2>
-  <ul id="dueBeforeNextPay"></ul>
-
-  <h2 style="margin-top:16px;">Cheapest Bridge (if short)</h2>
-  <div id="bridgeResult" class="small muted"></div>
-</div>
 
 <script>
   const LS_KEY = "house_cashflow_local_v1";
@@ -575,78 +548,6 @@
     writeForm(st);
     computeAndRender();
   })();
-</script>
-<script>
-/* ========= ADD-ON LOGIC ========= */
-
-function renderDueBeforeNextPay(model){
-  const ul = document.getElementById("dueBeforeNextPay");
-  if (!ul) return;
-  ul.innerHTML = "";
-  model.rows
-    .filter(r => new Date(r.date) <= new Date(model.nextPay) && r.outflow > 0)
-    .forEach(r => {
-      const li = document.createElement("li");
-      li.textContent = `${r.date} — ${r.name}: $${r.outflow.toFixed(2)}`;
-      ul.appendChild(li);
-    });
-}
-
-function checkWhatIf(model){
-  const d = document.getElementById("whatIfDate")?.value;
-  const a = Number(document.getElementById("whatIfAmount")?.value || 0);
-  const out = document.getElementById("whatIfResult");
-  if (!d || !a || !out) return;
-
-  let bal = model.cashStart;
-
-  model.rows.forEach(r=>{
-    if (new Date(r.date) <= new Date(d)) {
-      bal += (r.inflow||0) - (r.outflow||0);
-    }
-  });
-  bal -= a;
-
-  out.innerHTML = bal >= 0
-    ? `<span class="ok">Safe. Balance after purchase: $${bal.toFixed(2)}</span>`
-    : `<span class="bad">Not safe. Short by $${Math.abs(bal).toFixed(2)}</span>`;
-}
-
-function renderCheapestBridge(model){
-  const div = document.getElementById("bridgeResult");
-  if (!div) return;
-
-  const short = Math.max(0, -(model.cashStart + model.inflow1 - model.out1));
-  if (short <= 0){
-    div.textContent = "No bridge needed.";
-    return;
-  }
-
-  const days = Math.max(
-    1,
-    Math.floor((new Date(model.nextPay)-new Date(model.today))/(1000*3600*24))
-  );
-
-  const apr = (loadState().current?.locApr || 0)/100;
-  const interest = short * apr * (days/365);
-
-  div.textContent =
-    `Borrow $${short.toFixed(2)} via LOC for ${days} days → est. interest $${interest.toFixed(2)}`;
-}
-
-/* Hook after core render */
-const __orig = computeAndRender;
-computeAndRender = function(){
-  __orig();
-  const model = computeTimeline(readForm());
-  renderDueBeforeNextPay(model);
-  renderCheapestBridge(model);
-};
-
-document.getElementById("btnWhatIf")?.addEventListener("click", ()=>{
-  const model = computeTimeline(readForm());
-  checkWhatIf(model);
-});
 </script>
 </body>
 </html>
