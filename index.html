@@ -709,7 +709,12 @@ function computeTimeline(state){
   if (rentDue && state.house.rentAmount > 0) events.push({ date: toISO(rentDue), name: "Rent", inflow: 0, outflow: state.house.rentAmount });
   if (amexDue && state.alok.amex > 0) events.push({ date: toISO(amexDue), name: "AMEX (Alok)", inflow: 0, outflow: state.alok.amex });
   if (a_scotiaDue && state.alok.scotiaCc > 0) events.push({ date: toISO(a_scotiaDue), name: "Scotia CC (Alok)", inflow: 0, outflow: state.alok.scotiaCc });
-  if (a_locDue && state.alok.loc > 0) events.push({ date: toISO(a_locDue), name: "Scotia LOC (Alok)", inflow: 0, outflow: state.alok.loc });
+  if (a_locDue && state.alok.loc > 0) {
+    const apr = Number(state.alok.locApr || 0);
+    // LOC: user may pay minimum. Default here = interest-only (APR/12). If APR is 0, assume 0 and warn in Results.
+    const minLocPay = (apr > 0) ? (state.alok.loc * (apr/100) / 12) : 0;
+    events.push({ date: toISO(a_locDue), name: "Scotia LOC (Alok) — minimum", inflow: 0, outflow: minLocPay });
+  }
   if (n_cibcDue && state.namratha.cibc > 0) events.push({ date: toISO(n_cibcDue), name: "CIBC (Namratha)", inflow: 0, outflow: state.namratha.cibc });
   if (n_scotiaDue && state.namratha.scotiaCc > 0) events.push({ date: toISO(n_scotiaDue), name: "Scotia CC (Namratha)", inflow: 0, outflow: state.namratha.scotiaCc });
 
@@ -772,6 +777,24 @@ function computeTimeline(state){
 }
 
 function renderResults(model, state){
+// ===== DECISION (credit cards paid in full; LOC minimum allowed) =====
+let verdict = "SAFE";
+let reason = "All required bills are payable on time with the inputs provided.";
+let action = "Proceed. Keep balances updated from your apps.";
+
+const firstNegRow = model.rows.find(r => r.balance < 0);
+if (firstNegRow) {
+  verdict = "UNSAFE";
+  const shortBy = Math.abs(firstNegRow.balance);
+  reason = `You go negative on ${firstNegRow.date} due to: ${firstNegRow.name}. Short by $${fmtMoney(shortBy)}.`;
+  action = `Action: bridge/borrow $${fmtMoney(shortBy)} until the next pay, or reduce/shift a bill before ${firstNegRow.date}.`;
+}
+
+// Warn if LOC is used but APR is not set (minimum LOC payment assumed 0)
+if ((state.alok.loc || 0) > 0 && (Number(state.alok.locApr || 0) <= 0)) {
+  action += " Note: LOC APR is 0; LOC minimum payment assumed 0. Enter APR for realistic LOC minimum.";
+}
+
   // KPIs
   const surplus1 = (model.cashStart + model.inflow1) - model.out1;
   const surplus2 = (model.cashStart + model.inflow2) - model.out2;
@@ -782,6 +805,12 @@ function renderResults(model, state){
 
   const kpiGrid = $("kpiGrid");
   kpiGrid.innerHTML = `
+<div class="kpi" style="grid-column: span 12;">
+  <div class="t">Decision</div>
+  <div class="v ${verdict==="SAFE" ? "good" : "bad"}">${verdict}</div>
+  <div class="s">${reason}</div>
+  <div class="s">${action}</div>
+</div>
     <div class="kpi">
       <div class="t">Today</div>
       <div class="v">${model.today}</div>
