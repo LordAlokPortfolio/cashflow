@@ -3,551 +3,1001 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>House Cashflow (Local)</title>
-  <meta name="theme-color" content="#111827" />
+  <title>House Cashflow</title>
+  <meta name="theme-color" content="#0b1220" />
   <style>
-    :root { --bg:#0b1220; --panel:#111827; --text:#e5e7eb; --muted:#9ca3af; --line:#1f2937; }
-    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
-    .wrap { max-width: 980px; margin: 0 auto; padding: 18px; }
-    h1 { font-size: 18px; margin: 0 0 10px; }
-    h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); font-weight: 600; }
-    .grid { display:grid; grid-template-columns: repeat(12, 1fr); gap: 10px; }
-    .card { background: var(--panel); border:1px solid var(--line); border-radius: 10px; padding: 12px; }
-    label { display:block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
-    input, select, button { width:100%; padding: 9px 10px; border-radius: 8px; border:1px solid var(--line); background:#0f172a; color: var(--text); }
-    input[type="date"] { padding: 8px 10px; }
-    button { cursor:pointer; background:#1f2937; }
-    button.primary { background:#2563eb; border-color:#1d4ed8; }
-    button.danger { background:#7f1d1d; border-color:#991b1b; }
-    .row { display:flex; gap:10px; flex-wrap:wrap; }
-    .pill { display:inline-block; padding: 4px 8px; border-radius:999px; border:1px solid var(--line); color:var(--muted); font-size: 12px; }
-    .kpi { display:flex; gap:12px; flex-wrap:wrap; }
-    .kpi > div { min-width: 200px; }
-    .big { font-size: 22px; font-weight: 700; }
-    table { width:100%; border-collapse: collapse; font-size: 13px; }
-    th, td { border-bottom:1px solid var(--line); padding: 8px; text-align:left; vertical-align: top; }
-    th { color: var(--muted); font-weight: 600; }
-    .right { text-align:right; }
-    .ok { color: #34d399; }
-    .bad { color: #f87171; }
-    .muted { color: var(--muted); }
-    .small { font-size: 12px; }
-    .two { grid-column: span 2; }
-    .three { grid-column: span 3; }
-    .four { grid-column: span 4; }
-    .six { grid-column: span 6; }
-    .twelve { grid-column: span 12; }
-    @media (max-width: 760px){ .two,.three,.four,.six{ grid-column: span 12; } }
+    /* ---------- Apple-ish minimal UI (no frameworks) ---------- */
+    :root{
+      --bg: #0b1220;
+      --panel: rgba(255,255,255,0.06);
+      --panel2: rgba(255,255,255,0.08);
+      --stroke: rgba(255,255,255,0.10);
+      --text: rgba(255,255,255,0.92);
+      --muted: rgba(255,255,255,0.62);
+      --good: #34d399;
+      --bad: #fb7185;
+      --accent: #60a5fa;
+      --shadow: 0 18px 55px rgba(0,0,0,0.45);
+      --radius: 18px;
+      --radius2: 14px;
+      --pad: 16px;
+      --pad2: 12px;
+    }
+    [data-theme="light"]{
+      --bg: #f4f6fb;
+      --panel: rgba(255,255,255,0.75);
+      --panel2: rgba(255,255,255,0.92);
+      --stroke: rgba(17,24,39,0.10);
+      --text: rgba(17,24,39,0.92);
+      --muted: rgba(17,24,39,0.58);
+      --shadow: 0 18px 55px rgba(17,24,39,0.12);
+      --accent: #2563eb;
+    }
+    html,body{ height:100%; }
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      background:
+        radial-gradient(1200px 700px at 15% 10%, rgba(96,165,250,0.25), transparent 55%),
+        radial-gradient(900px 600px at 80% 15%, rgba(52,211,153,0.18), transparent 55%),
+        radial-gradient(900px 700px at 45% 90%, rgba(251,113,133,0.16), transparent 55%),
+        var(--bg);
+      color: var(--text);
+    }
+    .wrap{
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 18px 16px 42px;
+    }
+    .topbar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .brand{
+      display:flex; flex-direction:column; gap:2px;
+    }
+    .brand h1{ margin:0; font-size: 16px; letter-spacing: 0.2px; font-weight: 650; }
+    .brand .sub{ font-size:12px; color: var(--muted); }
+    .pillrow{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:flex-end; }
+    .pill{
+      border: 1px solid var(--stroke);
+      background: var(--panel);
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: var(--muted);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    .btn{
+      border: 1px solid var(--stroke);
+      background: var(--panel2);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: transform .08s ease, background .2s ease, border-color .2s ease;
+      user-select:none;
+    }
+    .btn:active{ transform: scale(0.98); }
+    .btn.primary{
+      background: linear-gradient(180deg, rgba(96,165,250,0.35), rgba(96,165,250,0.18));
+      border-color: rgba(96,165,250,0.35);
+    }
+    [data-theme="light"] .btn.primary{
+      background: linear-gradient(180deg, rgba(37,99,235,0.18), rgba(37,99,235,0.10));
+      border-color: rgba(37,99,235,0.28);
+    }
+    .btn.danger{
+      background: linear-gradient(180deg, rgba(251,113,133,0.28), rgba(251,113,133,0.14));
+      border-color: rgba(251,113,133,0.35);
+    }
+    .seg{
+      display:flex;
+      gap:6px;
+      padding: 6px;
+      border-radius: 999px;
+      border: 1px solid var(--stroke);
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      box-shadow: var(--shadow);
+    }
+    .seg button{
+      border:0;
+      background: transparent;
+      color: var(--muted);
+      padding: 10px 12px;
+      border-radius: 999px;
+      cursor:pointer;
+      font-weight:600;
+      font-size: 13px;
+      transition: background .2s ease, color .2s ease;
+    }
+    .seg button.active{
+      background: var(--panel2);
+      color: var(--text);
+      box-shadow: 0 10px 28px rgba(0,0,0,0.20);
+    }
+
+    .card{
+      border: 1px solid var(--stroke);
+      background: var(--panel);
+      border-radius: var(--radius);
+      padding: var(--pad);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+    }
+    .grid{
+      display:grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+    }
+    .col-12{ grid-column: span 12; }
+    .col-6{ grid-column: span 6; }
+    .col-4{ grid-column: span 4; }
+    .col-3{ grid-column: span 3; }
+    @media(max-width: 860px){
+      .col-6,.col-4,.col-3{ grid-column: span 12; }
+      .pillrow{ justify-content:flex-start; }
+    }
+
+    .sectionTitle{
+      display:flex; align-items:center; justify-content:space-between;
+      margin: 0 0 10px;
+    }
+    .sectionTitle h2{
+      margin:0;
+      font-size: 13px;
+      color: var(--muted);
+      letter-spacing: 0.2px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .field label{
+      display:block;
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .field input, .field select{
+      width:100%;
+      padding: 11px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--stroke);
+      background: rgba(0,0,0,0.10);
+      color: var(--text);
+      outline: none;
+      transition: border-color .2s ease, background .2s ease;
+    }
+    [data-theme="light"] .field input, [data-theme="light"] .field select{
+      background: rgba(255,255,255,0.85);
+    }
+    .field input:focus, .field select:focus{
+      border-color: rgba(96,165,250,0.55);
+    }
+
+    .actions{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .spacer{ flex:1; }
+
+    .kpis{
+      display:grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .kpi{
+      grid-column: span 4;
+      border: 1px solid var(--stroke);
+      background: var(--panel2);
+      border-radius: var(--radius2);
+      padding: 12px;
+    }
+    @media(max-width: 860px){ .kpi{ grid-column: span 12; } }
+    .kpi .t{ font-size: 12px; color: var(--muted); font-weight: 700; }
+    .kpi .v{ margin-top: 6px; font-size: 22px; font-weight: 800; letter-spacing: 0.2px; }
+    .kpi .s{ margin-top: 4px; font-size: 12px; color: var(--muted); }
+
+    .good{ color: var(--good); }
+    .bad{ color: var(--bad); }
+
+    table{
+      width:100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      border: 1px solid var(--stroke);
+      border-radius: var(--radius2);
+      overflow:hidden;
+      background: var(--panel2);
+    }
+    th, td{
+      padding: 10px 10px;
+      border-bottom: 1px solid var(--stroke);
+      text-align:left;
+      vertical-align: top;
+    }
+    th{ color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.2px; }
+    tr:last-child td{ border-bottom:0; }
+    .right{ text-align:right; }
+
+    .hidden{ display:none !important; }
+
+    .note{
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.35;
+      margin-top: 10px;
+    }
   </style>
 </head>
+
 <body>
 <div class="wrap">
-  <h1>House Cashflow (Local Only)</h1>
-  <div class="row">
-    <span class="pill">Data stays on this device (localStorage)</span>
-    <span class="pill">Host on GitHub Pages is safe (static only)</span>
+  <div class="topbar">
+    <div class="brand">
+      <h1>House Cashflow</h1>
+      <div class="sub">Local-only. Hosted on GitHub Pages. No bank APIs.</div>
+    </div>
+    <div class="pillrow">
+      <span class="pill" id="pillStorage">Local storage: OK</span>
+      <button class="btn" id="btnTheme">Toggle theme</button>
+    </div>
   </div>
 
-  <div class="grid">
-    <!-- MEMORY -->
-    <div class="card twelve">
-      <h2>Memory (rarely changes)</h2>
-      <div class="grid">
-        <div class="three">
-          <label>Pay frequency (days)</label>
-          <input id="payEveryDays" type="number" min="1" value="14"/>
-        </div>
-        <div class="three">
-          <label>Car loan (per pay)</label>
-          <input id="carLoanPerPay" type="number" step="0.01" value="180.26"/>
-        </div>
-        <div class="three">
-          <label>Spouse contribution (per pay)</label>
-          <input id="spousePerPay" type="number" step="0.01" value="0"/>
-        </div>
-        <div class="three">
-          <label>Projection horizon (days)</label>
-          <input id="horizonDays" type="number" min="14" value="90"/>
-        </div>
+  <div class="seg" role="tablist" aria-label="Navigation">
+    <button class="active" data-tab="today">Today</button>
+    <button data-tab="future">Future</button>
+    <button data-tab="results">Results</button>
+    <button data-tab="settings">Settings</button>
+  </div>
 
-        <div class="three">
-          <label>Rent due day (1–31)</label>
-          <input id="rentDueDay" type="number" min="1" max="31" value="28"/>
-        </div>
-        <div class="three">
-          <label>AMEX due day (1–31)</label>
-          <input id="amexDueDay" type="number" min="1" max="31" value="16"/>
-        </div>
-        <div class="three">
-          <label>Scotia CC due day (1–31)</label>
-          <input id="scotiaCcDueDay" type="number" min="1" max="31" value="5"/>
-        </div>
-        <div class="three">
-          <label>Scotia LOC due day (1–31)</label>
-          <input id="scotiaLocDueDay" type="number" min="1" max="31" value="8"/>
-        </div>
-      </div>
-    </div>
+  <div style="height:12px;"></div>
 
-    <!-- CURRENT INPUTS -->
-    <div class="card twelve">
-      <h2>Current Inputs (you update from apps)</h2>
-      <div class="grid">
-        <div class="three">
-          <label>Last pay date</label>
-          <input id="lastPayDate" type="date"/>
-        </div>
-        <div class="three">
-          <label>Your pay amount (per pay)</label>
-          <input id="payAmount" type="number" step="0.01" value="0"/>
-        </div>
-        <div class="three">
-          <label>Cash on hand (optional)</label>
-          <input id="cashOnHand" type="number" step="0.01" value="0"/>
-        </div>
-        <div class="three">
-          <label>Rent amount</label>
-          <input id="rentAmount" type="number" step="0.01" value="0"/>
-        </div>
-
-        <div class="three">
-          <label>AMEX statement balance</label>
-          <input id="amexBalance" type="number" step="0.01" value="0"/>
-        </div>
-        <div class="three">
-          <label>Scotia CC statement balance</label>
-          <input id="scotiaCcBalance" type="number" step="0.01" value="0"/>
-        </div>
-        <div class="three">
-          <label>Scotia LOC statement/balance</label>
-          <input id="scotiaLocBalance" type="number" step="0.01" value="0"/>
-        </div>
-        <div class="three">
-          <label>LOC APR (optional, for interest estimate)</label>
-          <input id="locApr" type="number" step="0.01" value="0"/>
-        </div>
-      </div>
-
-      <div class="row" style="margin-top:10px;">
-        <button class="primary" id="btnCompute">Compute</button>
-        <button id="btnSave">Save</button>
-        <button id="btnExport">Export JSON</button>
-        <label style="width:auto; display:flex; gap:8px; align-items:center;">
-          <input id="importFile" type="file" accept="application/json" style="max-width:240px;" />
-          <span class="small muted">Import JSON</span>
+  <!-- TODAY -->
+  <div class="card" id="tab-today">
+    <div class="sectionTitle">
+      <h2>Today inputs (from your apps)</h2>
+      <div class="actions">
+        <button class="btn primary" id="btnCompute">Compute</button>
+        <button class="btn" id="btnSave">Save</button>
+        <button class="btn" id="btnExport">Export</button>
+        <label class="btn" style="display:flex; align-items:center; gap:10px; padding:0 12px;">
+          <input id="importFile" type="file" accept="application/json" style="display:none;">
+          <span>Import</span>
         </label>
-        <button class="danger" id="btnReset">Reset Device Data</button>
-      </div>
-      <div class="small muted" style="margin-top:6px;">
-        Tip: put the correct pay amount per pay; spouse contribution per pay is in Memory section.
+        <button class="btn danger" id="btnReset">Reset</button>
       </div>
     </div>
 
-    <!-- FUTURE EXPENSES -->
-    <div class="card twelve">
-      <h2>Future Expenses (tickets, planned)</h2>
-      <div class="grid">
-        <div class="four">
-          <label>Date</label>
-          <input id="fxDate" type="date" />
+    <div class="grid">
+      <!-- Alok -->
+      <div class="col-6">
+        <div class="sectionTitle"><h2>Alok</h2></div>
+        <div class="grid">
+          <div class="col-6 field">
+            <label>Last pay date</label>
+            <input id="a_lastPayDate" type="date">
+          </div>
+          <div class="col-6 field">
+            <label>Pay amount (per pay)</label>
+            <input id="a_payAmount" type="number" step="0.01" value="0">
+          </div>
+          <div class="col-6 field">
+            <label>Cash on hand (optional)</label>
+            <input id="a_cash" type="number" step="0.01" value="0">
+          </div>
+          <div class="col-6 field">
+            <label>AMEX statement balance</label>
+            <input id="a_amex" type="number" step="0.01" value="0">
+          </div>
+          <div class="col-6 field">
+            <label>Scotia CC statement balance</label>
+            <input id="a_scotiaCc" type="number" step="0.01" value="0">
+          </div>
+          <div class="col-6 field">
+            <label>Scotia LOC balance</label>
+            <input id="a_loc" type="number" step="0.01" value="0">
+          </div>
+          <div class="col-6 field">
+            <label>LOC APR % (optional)</label>
+            <input id="a_locApr" type="number" step="0.01" value="0">
+          </div>
         </div>
-        <div class="four">
-          <label>Amount</label>
-          <input id="fxAmount" type="number" step="0.01" />
-        </div>
-        <div class="four">
-          <label>Label</label>
-          <input id="fxLabel" type="text" placeholder="India tickets" />
-        </div>
-      </div>
-      <div class="row" style="margin-top:10px;">
-        <button id="btnAddFx">Add Future Expense</button>
       </div>
 
-      <div style="margin-top:10px; overflow:auto;">
-        <table id="fxTable">
-          <thead>
-            <tr><th>Date</th><th>Label</th><th class="right">Amount</th><th></th></tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+      <!-- Namratha -->
+      <div class="col-6">
+        <div class="sectionTitle"><h2>Namratha</h2></div>
+        <div class="grid">
+          <div class="col-6 field">
+            <label>Last pay date</label>
+            <input id="n_lastPayDate" type="date">
+          </div>
+          <div class="col-6 field">
+            <label>Pay amount (per pay)</label>
+            <input id="n_payAmount" type="number" step="0.01" value="0">
+          </div>
+          <div class="col-6 field">
+            <label>Cash on hand (optional)</label>
+            <input id="n_cash" type="number" step="0.01" value="0">
+          </div>
+          <div class="col-6 field">
+            <label>CIBC statement balance</label>
+            <input id="n_cibc" type="number" step="0.01" value="0">
+          </div>
+          <div class="col-6 field">
+            <label>Scotia CC statement balance</label>
+            <input id="n_scotiaCc" type="number" step="0.01" value="0">
+          </div>
+        </div>
+      </div>
+
+      <!-- Shared -->
+      <div class="col-12">
+        <div class="sectionTitle"><h2>Shared (house)</h2></div>
+        <div class="grid">
+          <div class="col-4 field">
+            <label>Rent amount</label>
+            <input id="h_rentAmount" type="number" step="0.01" value="0">
+          </div>
+          <div class="col-4 field">
+            <label>Starting cash buffer (optional)</label>
+            <input id="h_buffer" type="number" step="0.01" value="0">
+          </div>
+          <div class="col-4 field">
+            <label>Note (optional)</label>
+            <input id="h_note" type="text" placeholder="e.g., tickets this month">
+          </div>
+        </div>
       </div>
     </div>
 
-    <!-- RESULTS -->
-    <div class="card twelve">
-      <h2>Results</h2>
-      <div class="kpi" id="kpi"></div>
-      <div style="margin-top:10px; overflow:auto;">
-        <table id="eventsTable">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Event</th>
-              <th class="right">Inflow</th>
-              <th class="right">Outflow</th>
-              <th class="right">Balance</th>
-              <th>Flag</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div class="small muted" style="margin-top:8px;">
-        Notes: This model assumes statement balances are paid on their due dates. If you pay early, update the balances manually.
-      </div>
+    <div class="note">
+      Fill only the fields you care about. If a balance is 0, leave it 0. The app assumes statement balances are paid on their due days.
     </div>
   </div>
+
+  <!-- FUTURE -->
+  <div class="card hidden" id="tab-future">
+    <div class="sectionTitle">
+      <h2>Future expenses</h2>
+      <div class="actions">
+        <button class="btn" id="btnAddFx">Add</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="col-4 field">
+        <label>Date</label>
+        <input id="fxDate" type="date">
+      </div>
+      <div class="col-4 field">
+        <label>Amount</label>
+        <input id="fxAmount" type="number" step="0.01">
+      </div>
+      <div class="col-4 field">
+        <label>Label</label>
+        <input id="fxLabel" type="text" placeholder="India tickets">
+      </div>
+    </div>
+
+    <div style="height:12px;"></div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:140px;">Date</th>
+          <th>Label</th>
+          <th class="right" style="width:140px;">Amount</th>
+          <th style="width:120px;"></th>
+        </tr>
+      </thead>
+      <tbody id="fxTbody"></tbody>
+    </table>
+
+    <div style="height:16px;"></div>
+
+    <div class="sectionTitle"><h2>What-if purchase</h2></div>
+    <div class="grid">
+      <div class="col-4 field">
+        <label>Date</label>
+        <input id="whatIfDate" type="date">
+      </div>
+      <div class="col-4 field">
+        <label>Amount</label>
+        <input id="whatIfAmount" type="number" step="0.01">
+      </div>
+      <div class="col-4 field">
+        <label>&nbsp;</label>
+        <button class="btn primary" id="btnWhatIf">Check</button>
+      </div>
+      <div class="col-12 note" id="whatIfOut"></div>
+    </div>
+  </div>
+
+  <!-- RESULTS -->
+  <div class="card hidden" id="tab-results">
+    <div class="sectionTitle"><h2>Results</h2></div>
+
+    <div class="kpis" id="kpiGrid"></div>
+
+    <div style="height:14px;"></div>
+
+    <div class="sectionTitle">
+      <h2>Timeline</h2>
+      <div class="actions">
+        <button class="btn" id="btnToggleTable">Toggle table</button>
+      </div>
+    </div>
+
+    <div id="tableWrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:140px;">Date</th>
+            <th>Event</th>
+            <th class="right" style="width:120px;">Inflow</th>
+            <th class="right" style="width:120px;">Outflow</th>
+            <th class="right" style="width:140px;">Balance</th>
+            <th style="width:110px;">Flag</th>
+          </tr>
+        </thead>
+        <tbody id="eventsTbody"></tbody>
+      </table>
+    </div>
+
+    <div class="note" id="bridgeNote"></div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div class="card hidden" id="tab-settings">
+    <div class="sectionTitle"><h2>Settings (rarely change)</h2></div>
+
+    <div class="grid">
+      <div class="col-3 field">
+        <label>Pay frequency (days)</label>
+        <input id="payEveryDays" type="number" min="1" value="14">
+      </div>
+
+      <div class="col-3 field">
+        <label>Horizon (days)</label>
+        <input id="horizonDays" type="number" min="14" value="90">
+      </div>
+
+      <div class="col-3 field">
+        <label>Alok car loan (per pay)</label>
+        <input id="a_carLoan" type="number" step="0.01" value="180.26">
+      </div>
+
+      <div class="col-3 field">
+        <label>Namratha car lease (per pay)</label>
+        <input id="n_carLease" type="number" step="0.01" value="0">
+      </div>
+
+      <div class="col-3 field">
+        <label>Rent due day</label>
+        <input id="rentDueDay" type="number" min="1" max="31" value="28">
+      </div>
+
+      <div class="col-3 field">
+        <label>AMEX due day (Alok)</label>
+        <input id="amexDueDay" type="number" min="1" max="31" value="16">
+      </div>
+
+      <div class="col-3 field">
+        <label>Scotia CC due day (Alok)</label>
+        <input id="a_scotiaDueDay" type="number" min="1" max="31" value="5">
+      </div>
+
+      <div class="col-3 field">
+        <label>LOC due day (Alok)</label>
+        <input id="a_locDueDay" type="number" min="1" max="31" value="8">
+      </div>
+
+      <div class="col-3 field">
+        <label>CIBC due day (Namratha)</label>
+        <input id="n_cibcDueDay" type="number" min="1" max="31" value="0">
+      </div>
+
+      <div class="col-3 field">
+        <label>Scotia CC due day (Namratha)</label>
+        <input id="n_scotiaDueDay" type="number" min="1" max="31" value="0">
+      </div>
+    </div>
+
+    <div class="note">
+      Due days are the day-of-month when you pay the statement balance. If a card’s due day is unknown, keep it 0 (it will be ignored).
+    </div>
+  </div>
+
 </div>
 
 <script>
-  const LS_KEY = "house_cashflow_local_v1";
+/* ================== CORE LOGIC (local-only) ================== */
+const LS_KEY = "house_cashflow_local_v2";
 
-  function fmtMoney(x){
-    const v = Number(x || 0);
-    return v.toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2});
-  }
-  function parseDate(s){ return s ? new Date(s+"T00:00:00") : null; }
-  function toISO(d){
-    const z = new Date(d.getTime() - d.getTimezoneOffset()*60000);
-    return z.toISOString().slice(0,10);
-  }
-  function addDays(d, n){ const r=new Date(d); r.setDate(r.getDate()+n); return r; }
-  function nextDueDateByDay(today, dueDay){
-    // returns next occurrence of day-of-month dueDay relative to today
-    const y=today.getFullYear(), m=today.getMonth();
-    const thisMonth = new Date(y,m,Math.min(dueDay, daysInMonth(y,m)));
-    if (today.getDate() <= dueDay) return thisMonth;
-    const nm = new Date(y,m+1,1);
-    return new Date(nm.getFullYear(), nm.getMonth(), Math.min(dueDay, daysInMonth(nm.getFullYear(), nm.getMonth())));
-  }
-  function daysInMonth(y,m){ return new Date(y,m+1,0).getDate(); }
+const $ = (id)=>document.getElementById(id);
 
-  function nextPayDateFromLast(today, lastPay, everyDays){
-    // first pay date strictly after today if today is pay date consider it "next"
-    const diffDays = Math.floor((today - lastPay) / (24*3600*1000));
-    const k = Math.max(0, Math.ceil(diffDays / everyDays));
-    let candidate = addDays(lastPay, k*everyDays);
-    if (candidate <= today) candidate = addDays(candidate, everyDays);
-    return candidate;
-  }
+function fmtMoney(x){
+  const v = Number(x||0);
+  return v.toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function parseDateISO(s){ return s ? new Date(s+"T00:00:00") : null; }
+function toISO(d){
+  const z = new Date(d.getTime() - d.getTimezoneOffset()*60000);
+  return z.toISOString().slice(0,10);
+}
+function addDays(d,n){ const r=new Date(d); r.setDate(r.getDate()+n); return r; }
+function daysInMonth(y,m){ return new Date(y,m+1,0).getDate(); }
+function nextDueDateByDay(today, dueDay){
+  if (!dueDay || dueDay < 1) return null;
+  const y=today.getFullYear(), m=today.getMonth();
+  const thisMonth = new Date(y,m,Math.min(dueDay, daysInMonth(y,m)));
+  if (today.getDate() <= dueDay) return thisMonth;
+  const nm = new Date(y,m+1,1);
+  return new Date(nm.getFullYear(), nm.getMonth(), Math.min(dueDay, daysInMonth(nm.getFullYear(), nm.getMonth())));
+}
+function nextPayDateFromLast(today, lastPay, everyDays){
+  const diffDays = Math.floor((today - lastPay) / (24*3600*1000));
+  const k = Math.max(0, Math.ceil(diffDays / everyDays));
+  let candidate = addDays(lastPay, k*everyDays);
+  if (candidate <= today) candidate = addDays(candidate, everyDays);
+  return candidate;
+}
 
-  function loadState(){
-    const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return { future: [] };
-    try { return JSON.parse(raw); } catch { return { future: [] }; }
-  }
-  function saveState(st){ localStorage.setItem(LS_KEY, JSON.stringify(st)); }
+function loadState(){
+  const raw = localStorage.getItem(LS_KEY);
+  if (!raw) return { theme:"dark", future:[] };
+  try { return JSON.parse(raw); } catch { return { theme:"dark", future:[] }; }
+}
+function saveState(st){ localStorage.setItem(LS_KEY, JSON.stringify(st)); }
 
-  function readForm(){
-    const st = loadState();
-    const f = (id)=>document.getElementById(id);
-    return {
-      memory: {
-        payEveryDays: Number(f("payEveryDays").value||14),
-        carLoanPerPay: Number(f("carLoanPerPay").value||0),
-        spousePerPay: Number(f("spousePerPay").value||0),
-        horizonDays: Number(f("horizonDays").value||90),
-        rentDueDay: Number(f("rentDueDay").value||28),
-        amexDueDay: Number(f("amexDueDay").value||16),
-        scotiaCcDueDay: Number(f("scotiaCcDueDay").value||5),
-        scotiaLocDueDay: Number(f("scotiaLocDueDay").value||8),
-      },
-      current: {
-        lastPayDate: f("lastPayDate").value || "",
-        payAmount: Number(f("payAmount").value||0),
-        cashOnHand: Number(f("cashOnHand").value||0),
-        rentAmount: Number(f("rentAmount").value||0),
-        amexBalance: Number(f("amexBalance").value||0),
-        scotiaCcBalance: Number(f("scotiaCcBalance").value||0),
-        scotiaLocBalance: Number(f("scotiaLocBalance").value||0),
-        locApr: Number(f("locApr").value||0),
-      },
-      future: st.future || []
-    };
-  }
+function readForm(){
+  return {
+    theme: document.documentElement.getAttribute("data-theme") || "dark",
+    settings:{
+      payEveryDays: Number($("payEveryDays").value||14),
+      horizonDays: Number($("horizonDays").value||90),
+      a_carLoan: Number($("a_carLoan").value||0),
+      n_carLease: Number($("n_carLease").value||0),
+      rentDueDay: Number($("rentDueDay").value||28),
+      amexDueDay: Number($("amexDueDay").value||16),
+      a_scotiaDueDay: Number($("a_scotiaDueDay").value||5),
+      a_locDueDay: Number($("a_locDueDay").value||8),
+      n_cibcDueDay: Number($("n_cibcDueDay").value||0),
+      n_scotiaDueDay: Number($("n_scotiaDueDay").value||0),
+    },
+    alok:{
+      lastPayDate: $("a_lastPayDate").value || "",
+      payAmount: Number($("a_payAmount").value||0),
+      cash: Number($("a_cash").value||0),
+      amex: Number($("a_amex").value||0),
+      scotiaCc: Number($("a_scotiaCc").value||0),
+      loc: Number($("a_loc").value||0),
+      locApr: Number($("a_locApr").value||0),
+    },
+    namratha:{
+      lastPayDate: $("n_lastPayDate").value || "",
+      payAmount: Number($("n_payAmount").value||0),
+      cash: Number($("n_cash").value||0),
+      cibc: Number($("n_cibc").value||0),
+      scotiaCc: Number($("n_scotiaCc").value||0),
+    },
+    house:{
+      rentAmount: Number($("h_rentAmount").value||0),
+      buffer: Number($("h_buffer").value||0),
+      note: $("h_note").value || "",
+    },
+    future: loadState().future || []
+  };
+}
 
-  function writeForm(state){
-    const f = (id)=>document.getElementById(id);
-    if (state.memory){
-      f("payEveryDays").value = state.memory.payEveryDays ?? 14;
-      f("carLoanPerPay").value = state.memory.carLoanPerPay ?? 0;
-      f("spousePerPay").value = state.memory.spousePerPay ?? 0;
-      f("horizonDays").value = state.memory.horizonDays ?? 90;
-      f("rentDueDay").value = state.memory.rentDueDay ?? 28;
-      f("amexDueDay").value = state.memory.amexDueDay ?? 16;
-      f("scotiaCcDueDay").value = state.memory.scotiaCcDueDay ?? 5;
-      f("scotiaLocDueDay").value = state.memory.scotiaLocDueDay ?? 8;
-    }
-    if (state.current){
-      f("lastPayDate").value = state.current.lastPayDate || "";
-      f("payAmount").value = state.current.payAmount ?? 0;
-      f("cashOnHand").value = state.current.cashOnHand ?? 0;
-      f("rentAmount").value = state.current.rentAmount ?? 0;
-      f("amexBalance").value = state.current.amexBalance ?? 0;
-      f("scotiaCcBalance").value = state.current.scotiaCcBalance ?? 0;
-      f("scotiaLocBalance").value = state.current.scotiaLocBalance ?? 0;
-      f("locApr").value = state.current.locApr ?? 0;
-    }
-    renderFutureTable(state.future || []);
-  }
+function writeForm(st){
+  document.documentElement.setAttribute("data-theme", st.theme || "dark");
 
-  function renderFutureTable(items){
-    const tbody = document.querySelector("#fxTable tbody");
-    tbody.innerHTML = "";
-    [...items].sort((a,b)=>a.date.localeCompare(b.date)).forEach((it, idx)=>{
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${it.date}</td>
-        <td>${(it.label||"")}</td>
-        <td class="right">${fmtMoney(it.amount)}</td>
-        <td class="right"><button data-idx="${idx}" class="danger" style="width:auto; padding:6px 10px;">Delete</button></td>
-      `;
-      tbody.appendChild(tr);
-    });
-    tbody.querySelectorAll("button[data-idx]").forEach(btn=>{
-      btn.addEventListener("click", ()=>{
-        const st = loadState();
-        st.future = (st.future||[]);
-        st.future.splice(Number(btn.dataset.idx),1);
-        saveState(st);
-        writeForm(st);
-        computeAndRender(); // update results
-      });
-    });
-  }
+  // settings
+  $("payEveryDays").value = st.settings?.payEveryDays ?? 14;
+  $("horizonDays").value = st.settings?.horizonDays ?? 90;
+  $("a_carLoan").value = st.settings?.a_carLoan ?? 0;
+  $("n_carLease").value = st.settings?.n_carLease ?? 0;
+  $("rentDueDay").value = st.settings?.rentDueDay ?? 28;
+  $("amexDueDay").value = st.settings?.amexDueDay ?? 16;
+  $("a_scotiaDueDay").value = st.settings?.a_scotiaDueDay ?? 5;
+  $("a_locDueDay").value = st.settings?.a_locDueDay ?? 8;
+  $("n_cibcDueDay").value = st.settings?.n_cibcDueDay ?? 0;
+  $("n_scotiaDueDay").value = st.settings?.n_scotiaDueDay ?? 0;
 
-  function computeTimeline(state){
-    const today = new Date();
-    today.setHours(0,0,0,0);
+  // alok
+  $("a_lastPayDate").value = st.alok?.lastPayDate || "";
+  $("a_payAmount").value = st.alok?.payAmount ?? 0;
+  $("a_cash").value = st.alok?.cash ?? 0;
+  $("a_amex").value = st.alok?.amex ?? 0;
+  $("a_scotiaCc").value = st.alok?.scotiaCc ?? 0;
+  $("a_loc").value = st.alok?.loc ?? 0;
+  $("a_locApr").value = st.alok?.locApr ?? 0;
 
-    const lastPay = parseDate(state.current.lastPayDate);
-    if (!lastPay) throw new Error("Last Pay Date is required.");
+  // namratha
+  $("n_lastPayDate").value = st.namratha?.lastPayDate || "";
+  $("n_payAmount").value = st.namratha?.payAmount ?? 0;
+  $("n_cash").value = st.namratha?.cash ?? 0;
+  $("n_cibc").value = st.namratha?.cibc ?? 0;
+  $("n_scotiaCc").value = st.namratha?.scotiaCc ?? 0;
 
-    const everyDays = state.memory.payEveryDays || 14;
-    const horizon = state.memory.horizonDays || 90;
+  // house
+  $("h_rentAmount").value = st.house?.rentAmount ?? 0;
+  $("h_buffer").value = st.house?.buffer ?? 0;
+  $("h_note").value = st.house?.note ?? "";
 
-    const nextPay = nextPayDateFromLast(today, lastPay, everyDays);
-    const nextPay2 = addDays(nextPay, everyDays);
+  renderFutureTable(st.future || []);
+}
 
-    const payInflow = (state.current.payAmount || 0) + (state.memory.spousePerPay || 0);
-    const cashStart = state.current.cashOnHand || 0;
-
-    const rentDue = nextDueDateByDay(today, state.memory.rentDueDay);
-    const amexDue = nextDueDateByDay(today, state.memory.amexDueDay);
-    const scotiaCcDue = nextDueDateByDay(today, state.memory.scotiaCcDueDay);
-    const scotiaLocDue = nextDueDateByDay(today, state.memory.scotiaLocDueDay);
-
-    // Events: inflows
-    const events = [];
-    // Generate pay events through horizon
-    let p = nextPay;
-    while (p <= addDays(today, horizon)){
-      events.push({ date: toISO(p), name: "Paycheque (+ spouse)", inflow: payInflow, outflow: 0 });
-      // car loan deducted same day (pay-synced)
-      const car = state.memory.carLoanPerPay || 0;
-      if (car > 0) events.push({ date: toISO(p), name: "Car loan (per pay)", inflow: 0, outflow: car });
-      p = addDays(p, everyDays);
-    }
-
-    // Obligations: pay statement balances on due date
-    if (state.current.rentAmount > 0) events.push({ date: toISO(rentDue), name: "Rent", inflow: 0, outflow: state.current.rentAmount });
-    if (state.current.amexBalance > 0) events.push({ date: toISO(amexDue), name: "AMEX statement due", inflow: 0, outflow: state.current.amexBalance });
-    if (state.current.scotiaCcBalance > 0) events.push({ date: toISO(scotiaCcDue), name: "Scotia CC statement due", inflow: 0, outflow: state.current.scotiaCcBalance });
-    if (state.current.scotiaLocBalance > 0) events.push({ date: toISO(scotiaLocDue), name: "Scotia LOC due", inflow: 0, outflow: state.current.scotiaLocBalance });
-
-    // Future expenses (user-entered)
-    (state.future || []).forEach(it=>{
-      if (it?.date && Number(it.amount||0) !== 0){
-        events.push({ date: it.date, name: `Future: ${it.label||"Expense"}`, inflow: 0, outflow: Number(it.amount||0) });
-      }
-    });
-
-    // Sort by date then outflows after inflows same day (so pay arrives before bills if same date)
-    events.sort((a,b)=>{
-      if (a.date !== b.date) return a.date.localeCompare(b.date);
-      return (b.inflow - a.inflow) || (a.outflow - b.outflow);
-    });
-
-    // Walk balance
-    let bal = cashStart;
-    let minBal = bal;
-    let firstNeg = null;
-
-    const rows = events
-      .filter(e=>{
-        const d = parseDate(e.date);
-        return d >= today && d <= addDays(today, horizon);
-      })
-      .map(e=>{
-        bal = bal + (e.inflow||0) - (e.outflow||0);
-        if (bal < minBal) minBal = bal;
-        if (bal < 0 && !firstNeg) firstNeg = e.date;
-        return { ...e, balance: bal };
-      });
-
-    // Window summaries
-    const dueBeforeNextPay = rows.filter(r => parseDate(r.date) <= nextPay && r.outflow > 0);
-    const dueBeforeNext2Pays = rows.filter(r => parseDate(r.date) <= nextPay2 && r.outflow > 0);
-
-    const out1 = dueBeforeNextPay.reduce((s,r)=>s+r.outflow,0);
-    const out2 = dueBeforeNext2Pays.reduce((s,r)=>s+r.outflow,0);
-
-    const inflow1 = rows.filter(r=> parseDate(r.date) <= nextPay).reduce((s,r)=>s+r.inflow,0);
-    const inflow2 = rows.filter(r=> parseDate(r.date) <= nextPay2).reduce((s,r)=>s+r.inflow,0);
-
-    // Estimated LOC interest for bridging a shortfall (simple)
-    const apr = state.current.locApr || 0;
-    function estInterest(shortAmt, days){
-      if (shortAmt <= 0 || apr <= 0 || days <= 0) return 0;
-      return shortAmt * (apr/100) * (days/365);
-    }
-
-    return {
-      today: toISO(today),
-      nextPay: toISO(nextPay),
-      nextPay2: toISO(nextPay2),
-      payInflow,
-      cashStart,
-      rows,
-      out1, out2,
-      inflow1, inflow2,
-      minBal,
-      firstNeg,
-      estInterest
-    };
-  }
-
-  function renderResults(model){
-    const kpi = document.getElementById("kpi");
-    const surplusNextPay = (model.cashStart + model.inflow1) - model.out1;
-    const surplusNext2Pay = (model.cashStart + model.inflow2) - model.out2;
-
-    const needBridge = surplusNextPay < 0 ? Math.abs(surplusNextPay) : 0;
-    const daysToNextPay = Math.max(0, Math.floor((parseDate(model.nextPay) - parseDate(model.today)) / (24*3600*1000)));
-    const estInt = model.estInterest(needBridge, daysToNextPay);
-
-    kpi.innerHTML = `
-      <div><div class="muted small">Today</div><div class="big">${model.today}</div></div>
-      <div><div class="muted small">Next Pay</div><div class="big">${model.nextPay}</div><div class="small muted">Inflow per pay: ${fmtMoney(model.payInflow)}</div></div>
-      <div><div class="muted small">Surplus/Shortfall (by next pay)</div>
-           <div class="big ${surplusNextPay>=0?'ok':'bad'}">${surplusNextPay>=0?'+':''}${fmtMoney(surplusNextPay)}</div>
-           <div class="small muted">Total outflows ≤ next pay: ${fmtMoney(model.out1)}</div></div>
-      <div><div class="muted small">Surplus/Shortfall (by 2nd pay)</div>
-           <div class="big ${surplusNext2Pay>=0?'ok':'bad'}">${surplusNext2Pay>=0?'+':''}${fmtMoney(surplusNext2Pay)}</div>
-           <div class="small muted">Total outflows ≤ 2nd pay: ${fmtMoney(model.out2)}</div></div>
-      <div><div class="muted small">Minimum balance (next ${loadState().memory?.horizonDays||90} days)</div>
-           <div class="big ${model.minBal>=0?'ok':'bad'}">${fmtMoney(model.minBal)}</div>
-           <div class="small muted">${model.firstNeg?('First negative on: '+model.firstNeg):'No negative balance in horizon'}</div></div>
-      <div><div class="muted small">If you bridge shortfall via LOC</div>
-           <div class="big">${fmtMoney(needBridge)}</div>
-           <div class="small muted">Est. interest to next pay: ${fmtMoney(estInt)}</div></div>
+function renderFutureTable(items){
+  const tbody = $("fxTbody");
+  tbody.innerHTML = "";
+  [...items].sort((a,b)=>a.date.localeCompare(b.date)).forEach((it, idx)=>{
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${it.date}</td>
+      <td>${(it.label||"")}</td>
+      <td class="right">${fmtMoney(it.amount)}</td>
+      <td class="right"><button class="btn danger" data-del="${idx}" style="padding:8px 10px; width:auto;">Delete</button></td>
     `;
-
-    const tbody = document.querySelector("#eventsTable tbody");
-    tbody.innerHTML = "";
-    model.rows.forEach(r=>{
-      const tr = document.createElement("tr");
-      const flag = r.balance < 0 ? `<span class="bad">NEGATIVE</span>` : "";
-      tr.innerHTML = `
-        <td>${r.date}</td>
-        <td>${r.name}</td>
-        <td class="right">${r.inflow?fmtMoney(r.inflow):""}</td>
-        <td class="right">${r.outflow?fmtMoney(r.outflow):""}</td>
-        <td class="right">${fmtMoney(r.balance)}</td>
-        <td>${flag}</td>
-      `;
-      tbody.appendChild(tr);
-    });
-  }
-
-  function computeAndRender(){
-    const state = readForm();
-    // persist future inside LS state
-    const st = loadState();
-    st.memory = state.memory;
-    st.current = state.current;
-    st.future = state.future;
-    saveState(st);
-
-    try{
-      const model = computeTimeline(state);
-      renderResults(model);
-    }catch(e){
-      document.getElementById("kpi").innerHTML = `<div class="bad">Error: ${e.message}</div>`;
-      document.querySelector("#eventsTable tbody").innerHTML = "";
-    }
-  }
-
-  // Buttons
-  document.getElementById("btnCompute").addEventListener("click", computeAndRender);
-  document.getElementById("btnSave").addEventListener("click", ()=>{
-    const s = readForm(); saveState(s); computeAndRender();
+    tbody.appendChild(tr);
   });
-
-  document.getElementById("btnAddFx").addEventListener("click", ()=>{
-    const d = document.getElementById("fxDate").value;
-    const a = Number(document.getElementById("fxAmount").value||0);
-    const l = document.getElementById("fxLabel").value || "";
-    if (!d || !a) return;
-    const st = loadState();
-    st.future = st.future || [];
-    st.future.push({ date:d, amount:a, label:l });
-    saveState(st);
-    document.getElementById("fxDate").value = "";
-    document.getElementById("fxAmount").value = "";
-    document.getElementById("fxLabel").value = "";
-    writeForm(st);
-    computeAndRender();
-  });
-
-  document.getElementById("btnExport").addEventListener("click", ()=>{
-    const st = loadState();
-    const blob = new Blob([JSON.stringify(st,null,2)], {type:"application/json"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "house-cashflow-backup.json";
-    a.click();
-    URL.revokeObjectURL(url);
-  });
-
-  document.getElementById("importFile").addEventListener("change", async (e)=>{
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const txt = await file.text();
-    try{
-      const st = JSON.parse(txt);
+  tbody.querySelectorAll("button[data-del]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const st = loadState();
+      st.future = st.future || [];
+      st.future.splice(Number(btn.dataset.del),1);
       saveState(st);
       writeForm(st);
       computeAndRender();
-    }catch{
-      alert("Invalid JSON file.");
-    }finally{
-      e.target.value = "";
+    });
+  });
+}
+
+function computeTimeline(state){
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  const everyDays = state.settings.payEveryDays || 14;
+  const horizon = state.settings.horizonDays || 90;
+
+  const a_lastPay = parseDateISO(state.alok.lastPayDate);
+  const n_lastPay = parseDateISO(state.namratha.lastPayDate);
+  if (!a_lastPay) throw new Error("Alok: last pay date is required.");
+  if (!n_lastPay) throw new Error("Namratha: last pay date is required.");
+
+  // next pay dates per person
+  const a_nextPay = nextPayDateFromLast(today, a_lastPay, everyDays);
+  const n_nextPay = nextPayDateFromLast(today, n_lastPay, everyDays);
+
+  // shared starting balance (combined pool)
+  const cashStart = (state.alok.cash||0) + (state.namratha.cash||0) + (state.house.buffer||0);
+
+  // due dates (next occurrence)
+  const rentDue = nextDueDateByDay(today, state.settings.rentDueDay);
+  const amexDue = nextDueDateByDay(today, state.settings.amexDueDay);
+  const a_scotiaDue = nextDueDateByDay(today, state.settings.a_scotiaDueDay);
+  const a_locDue = nextDueDateByDay(today, state.settings.a_locDueDay);
+  const n_cibcDue = nextDueDateByDay(today, state.settings.n_cibcDueDay);
+  const n_scotiaDue = nextDueDateByDay(today, state.settings.n_scotiaDueDay);
+
+  const events = [];
+
+  // pay stream generator (per person)
+  function addPayStream(name, firstPay, payAmt, perPayDebt){
+    let p = firstPay;
+    while (p <= addDays(today, horizon)){
+      events.push({ date: toISO(p), name: `${name} pay`, inflow: payAmt, outflow: 0 });
+      if ((perPayDebt||0) > 0){
+        events.push({ date: toISO(p), name: `${name} pay-synced obligation`, inflow: 0, outflow: perPayDebt });
+      }
+      p = addDays(p, everyDays);
+    }
+  }
+
+  addPayStream("Alok", a_nextPay, Number(state.alok.payAmount||0), Number(state.settings.a_carLoan||0));
+  addPayStream("Namratha", n_nextPay, Number(state.namratha.payAmount||0), Number(state.settings.n_carLease||0));
+
+  // obligations (statement balances)
+  if (rentDue && state.house.rentAmount > 0) events.push({ date: toISO(rentDue), name: "Rent", inflow: 0, outflow: state.house.rentAmount });
+  if (amexDue && state.alok.amex > 0) events.push({ date: toISO(amexDue), name: "AMEX (Alok)", inflow: 0, outflow: state.alok.amex });
+  if (a_scotiaDue && state.alok.scotiaCc > 0) events.push({ date: toISO(a_scotiaDue), name: "Scotia CC (Alok)", inflow: 0, outflow: state.alok.scotiaCc });
+  if (a_locDue && state.alok.loc > 0) events.push({ date: toISO(a_locDue), name: "Scotia LOC (Alok)", inflow: 0, outflow: state.alok.loc });
+  if (n_cibcDue && state.namratha.cibc > 0) events.push({ date: toISO(n_cibcDue), name: "CIBC (Namratha)", inflow: 0, outflow: state.namratha.cibc });
+  if (n_scotiaDue && state.namratha.scotiaCc > 0) events.push({ date: toISO(n_scotiaDue), name: "Scotia CC (Namratha)", inflow: 0, outflow: state.namratha.scotiaCc });
+
+  // future expenses
+  (state.future || []).forEach(it=>{
+    if (it?.date && Number(it.amount||0) !== 0){
+      events.push({ date: it.date, name: `Future: ${it.label||"Expense"}`, inflow: 0, outflow: Number(it.amount||0) });
     }
   });
 
-  document.getElementById("btnReset").addEventListener("click", ()=>{
-    if (!confirm("Delete local data on this device?")) return;
-    localStorage.removeItem(LS_KEY);
-    writeForm({future:[]});
-    computeAndRender();
+  // sort: date asc; inflow before outflow on same date
+  events.sort((a,b)=>{
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    return (b.inflow - a.inflow) || (a.outflow - b.outflow);
   });
 
-  // Initialize
-  (function init(){
-    const st = loadState();
-    // If empty, prefill lastPayDate to today-14 for convenience
-    if (!st.current) st.current = {};
-    if (!st.current.lastPayDate){
-      const d = addDays(new Date(), -14);
-      st.current.lastPayDate = toISO(d);
-    }
+  let bal = cashStart;
+  let minBal = bal;
+  let firstNeg = null;
+
+  const rows = events
+    .filter(e=>{
+      const d = parseDateISO(e.date);
+      return d >= today && d <= addDays(today, horizon);
+    })
+    .map(e=>{
+      bal = bal + (e.inflow||0) - (e.outflow||0);
+      if (bal < minBal) minBal = bal;
+      if (bal < 0 && !firstNeg) firstNeg = e.date;
+      return { ...e, balance: bal };
+    });
+
+  // Next household pay(s): use earliest upcoming pay as "next pay" anchor, then +everyDays
+  const nextHousePay = (a_nextPay <= n_nextPay) ? a_nextPay : n_nextPay;
+  const nextHousePay2 = addDays(nextHousePay, everyDays);
+
+  const out1 = rows.filter(r => parseDateISO(r.date) <= nextHousePay && r.outflow > 0).reduce((s,r)=>s+r.outflow,0);
+  const inflow1 = rows.filter(r => parseDateISO(r.date) <= nextHousePay).reduce((s,r)=>s+r.inflow,0);
+  const out2 = rows.filter(r => parseDateISO(r.date) <= nextHousePay2 && r.outflow > 0).reduce((s,r)=>s+r.outflow,0);
+  const inflow2 = rows.filter(r => parseDateISO(r.date) <= nextHousePay2).reduce((s,r)=>s+r.inflow,0);
+
+  // LOC bridge estimate (uses Alok LOC APR as household bridge)
+  function estInterest(shortAmt, days){
+    const apr = Number(state.alok.locApr||0);
+    if (shortAmt <= 0 || apr <= 0 || days <= 0) return 0;
+    return shortAmt * (apr/100) * (days/365);
+  }
+
+  return {
+    today: toISO(today),
+    nextPay: toISO(nextHousePay),
+    nextPay2: toISO(nextHousePay2),
+    cashStart,
+    rows,
+    out1, out2, inflow1, inflow2,
+    minBal,
+    firstNeg,
+    estInterest
+  };
+}
+
+function renderResults(model, state){
+  // KPIs
+  const surplus1 = (model.cashStart + model.inflow1) - model.out1;
+  const surplus2 = (model.cashStart + model.inflow2) - model.out2;
+
+  const needBridge = surplus1 < 0 ? Math.abs(surplus1) : 0;
+  const daysToNextPay = Math.max(0, Math.floor((parseDateISO(model.nextPay) - parseDateISO(model.today)) / (24*3600*1000)));
+  const bridgeInterest = model.estInterest(needBridge, daysToNextPay);
+
+  const kpiGrid = $("kpiGrid");
+  kpiGrid.innerHTML = `
+    <div class="kpi">
+      <div class="t">Today</div>
+      <div class="v">${model.today}</div>
+      <div class="s">Combined starting cash: ${fmtMoney(model.cashStart)}</div>
+    </div>
+    <div class="kpi">
+      <div class="t">Next pay (house)</div>
+      <div class="v">${model.nextPay}</div>
+      <div class="s">Includes both pay streams</div>
+    </div>
+    <div class="kpi">
+      <div class="t">Surplus / Shortfall (by next pay)</div>
+      <div class="v ${surplus1>=0?'good':'bad'}">${surplus1>=0?'+':''}${fmtMoney(surplus1)}</div>
+      <div class="s">Outflows ≤ next pay: ${fmtMoney(model.out1)}</div>
+    </div>
+    <div class="kpi">
+      <div class="t">Surplus / Shortfall (by 2nd pay)</div>
+      <div class="v ${surplus2>=0?'good':'bad'}">${surplus2>=0?'+':''}${fmtMoney(surplus2)}</div>
+      <div class="s">Outflows ≤ 2nd pay: ${fmtMoney(model.out2)}</div>
+    </div>
+    <div class="kpi">
+      <div class="t">Minimum balance (horizon)</div>
+      <div class="v ${model.minBal>=0?'good':'bad'}">${fmtMoney(model.minBal)}</div>
+      <div class="s">${model.firstNeg ? `First negative on ${model.firstNeg}` : `No negative within ${state.settings.horizonDays} days`}</div>
+    </div>
+    <div class="kpi">
+      <div class="t">Bridge estimate (LOC)</div>
+      <div class="v">${fmtMoney(needBridge)}</div>
+      <div class="s">Est. interest to next pay: ${fmtMoney(bridgeInterest)}</div>
+    </div>
+  `;
+
+  // timeline table
+  const tbody = $("eventsTbody");
+  tbody.innerHTML = "";
+  model.rows.forEach(r=>{
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${r.date}</td>
+      <td>${r.name}</td>
+      <td class="right">${r.inflow ? fmtMoney(r.inflow) : ""}</td>
+      <td class="right">${r.outflow ? fmtMoney(r.outflow) : ""}</td>
+      <td class="right">${fmtMoney(r.balance)}</td>
+      <td>${r.balance < 0 ? '<span class="bad">NEGATIVE</span>' : ''}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // bridge note
+  $("bridgeNote").textContent =
+    "Assumes statement balances are paid on due days. Update balances manually after you pay early.";
+}
+
+function computeAndRender(){
+  const st = loadState();
+  const state = readForm();
+  st.theme = state.theme;
+  st.settings = state.settings;
+  st.alok = state.alok;
+  st.namratha = state.namratha;
+  st.house = state.house;
+  st.future = state.future;
+  saveState(st);
+
+  try{
+    const model = computeTimeline(state);
+    // always render in Results tab, but also refresh while on Today
+    renderResults(model, state);
+    st._lastModel = model; // cache for what-if
+    saveState(st);
+  }catch(e){
+    $("kpiGrid").innerHTML = `<div class="kpi"><div class="t">Error</div><div class="v bad">${e.message}</div><div class="s">Fix missing pay dates.</div></div>`;
+    $("eventsTbody").innerHTML = "";
+  }
+}
+
+function checkWhatIf(){
+  const st = loadState();
+  const state = readForm();
+  const model = computeTimeline(state);
+
+  const d = $("whatIfDate").value;
+  const a = Number($("whatIfAmount").value||0);
+  if (!d || !a){
+    $("whatIfOut").textContent = "Enter a date and amount.";
+    return;
+  }
+
+  let bal = model.cashStart;
+  model.rows.forEach(r=>{
+    if (new Date(r.date) <= new Date(d)) bal += (r.inflow||0) - (r.outflow||0);
+  });
+  bal -= a;
+
+  $("whatIfOut").innerHTML = (bal >= 0)
+    ? `<span class="good">Safe.</span> Balance after purchase: <b>${fmtMoney(bal)}</b>`
+    : `<span class="bad">Not safe.</span> Short by <b>${fmtMoney(Math.abs(bal))}</b>`;
+}
+
+/* ================== NAV + EVENTS ================== */
+
+function showTab(name){
+  ["today","future","results","settings"].forEach(t=>{
+    $("tab-"+t).classList.toggle("hidden", t!==name);
+    document.querySelector(`.seg button[data-tab="${t}"]`).classList.toggle("active", t===name);
+  });
+}
+
+document.querySelectorAll(".seg button").forEach(btn=>{
+  btn.addEventListener("click", ()=> showTab(btn.dataset.tab));
+});
+
+$("btnCompute").addEventListener("click", ()=>{ computeAndRender(); showTab("results"); });
+$("btnSave").addEventListener("click", ()=>{ const st=loadState(); Object.assign(st, readForm()); st.future = loadState().future||[]; saveState(st); computeAndRender(); });
+
+$("btnAddFx").addEventListener("click", ()=>{
+  const d = $("fxDate").value;
+  const a = Number($("fxAmount").value||0);
+  const l = $("fxLabel").value || "";
+  if (!d || !a) return;
+  const st = loadState();
+  st.future = st.future || [];
+  st.future.push({ date:d, amount:a, label:l });
+  saveState(st);
+  $("fxDate").value=""; $("fxAmount").value=""; $("fxLabel").value="";
+  writeForm(st);
+  computeAndRender();
+});
+
+$("btnWhatIf").addEventListener("click", checkWhatIf);
+
+$("btnToggleTable").addEventListener("click", ()=>{
+  $("tableWrap").classList.toggle("hidden");
+});
+
+$("btnExport").addEventListener("click", ()=>{
+  const st = loadState();
+  const blob = new Blob([JSON.stringify(st,null,2)], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "house-cashflow-backup.json";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+$("importFile").addEventListener("change", async (e)=>{
+  const file = e.target.files?.[0];
+  if (!file) return;
+  const txt = await file.text();
+  try{
+    const st = JSON.parse(txt);
     saveState(st);
     writeForm(st);
     computeAndRender();
-  })();
+  }catch{
+    alert("Invalid JSON file.");
+  }finally{
+    e.target.value = "";
+  }
+});
+
+$("btnReset").addEventListener("click", ()=>{
+  if (!confirm("Delete local data on this device?")) return;
+  localStorage.removeItem(LS_KEY);
+  location.reload();
+});
+
+$("btnTheme").addEventListener("click", ()=>{
+  const cur = document.documentElement.getAttribute("data-theme") || "dark";
+  const next = (cur === "dark") ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  const st = loadState();
+  st.theme = next;
+  saveState(st);
+});
+
+/* ================== INIT ================== */
+(function init(){
+  // storage indicator
+  try {
+    localStorage.setItem("__t","1"); localStorage.removeItem("__t");
+    $("pillStorage").textContent = "Local storage: OK";
+  } catch {
+    $("pillStorage").textContent = "Local storage: BLOCKED";
+  }
+
+  const st = loadState();
+
+  // defaults
+  if (!st.theme) st.theme = "dark";
+  document.documentElement.setAttribute("data-theme", st.theme);
+
+  if (!st.settings) st.settings = {
+    payEveryDays: 14, horizonDays: 90,
+    a_carLoan: 180.26, n_carLease: 0,
+    rentDueDay: 28, amexDueDay: 16,
+    a_scotiaDueDay: 5, a_locDueDay: 8,
+    n_cibcDueDay: 0, n_scotiaDueDay: 0
+  };
+  if (!st.alok) st.alok = { lastPayDate:"", payAmount:0, cash:0, amex:0, scotiaCc:0, loc:0, locApr:0 };
+  if (!st.namratha) st.namratha = { lastPayDate:"", payAmount:0, cash:0, cibc:0, scotiaCc:0 };
+  if (!st.house) st.house = { rentAmount:0, buffer:0, note:"" };
+  if (!st.future) st.future = [];
+
+  // convenience: prefill last pay dates to today-14 if empty
+  const td = new Date();
+  const fallback = toISO(addDays(td, -14));
+  if (!st.alok.lastPayDate) st.alok.lastPayDate = fallback;
+  if (!st.namratha.lastPayDate) st.namratha.lastPayDate = fallback;
+
+  saveState(st);
+  writeForm(st);
+  computeAndRender();
+  showTab("today");
+})();
 </script>
 </body>
 </html>
