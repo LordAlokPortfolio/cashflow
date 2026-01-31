@@ -12,8 +12,6 @@
 
 <body class="ios6-wallpaper">
   <div class="wrap">
-
-    <!-- iOS 6 style top bar -->
     <div class="ios6-navbar">
       <div class="ios6-title">House Cashflow</div>
       <div class="ios6-actions">
@@ -22,7 +20,6 @@
       </div>
     </div>
 
-    <!-- Tabs (Setup is the entry point until completed) -->
     <div class="seg ios6-seg" role="tablist">
       <button class="active" data-tab="setup" id="tabBtnSetup">Setup</button>
       <button data-tab="today" id="tabBtnToday">Today</button>
@@ -38,30 +35,29 @@
       <div class="section-title">
         <div>
           <div class="h">Setup (one question at a time)</div>
-          <div class="muted small">Answer each step. Finish → Decision screen.</div>
+          <div class="muted small">Finish → Decision screen.</div>
         </div>
       </div>
 
       <div class="ios6-quiz">
         <div class="ios6-quiz-top">
-          <div class="ios6-progress" id="quizProgress">Step 1 of 1</div>
+          <div class="ios6-progress" id="quizProgress">Step 1</div>
           <div class="ios6-progressbar">
             <div class="ios6-progressbar-fill" id="quizProgressFill" style="width:0%"></div>
           </div>
         </div>
 
         <div class="ios6-quiz-card">
-          <div class="ios6-quiz-q" id="quizQuestion">Question</div>
-          <div class="ios6-quiz-reason" id="quizReason">Reason</div>
+          <div class="ios6-quiz-q" id="quizQuestion"></div>
+          <div class="ios6-quiz-reason" id="quizReason"></div>
           <div class="ios6-quiz-input" id="quizInput"></div>
+          <div class="note" id="quizNote"></div>
         </div>
 
         <div class="ios6-quiz-nav">
           <button class="ios6-btn" id="quizBack">Back</button>
           <button class="ios6-btn primary" id="quizNext">Next</button>
         </div>
-
-        <div class="note" id="quizNote"></div>
       </div>
     </section>
 
@@ -69,14 +65,13 @@
     <section class="card hidden ios6-card" id="tab-today">
       <div class="section-title">
         <div>
-          <div class="h">Today (enter from apps)</div>
-          <div class="muted small">Fill only what exists for you. Leave unknown as 0.</div>
+          <div class="h">Today (from apps)</div>
+          <div class="muted small">Update balances. Compute → Decision.</div>
         </div>
         <div class="row">
-          <button class="btn primary ios6-btn primary" id="btnCompute">Compute</button>
-          <button class="btn ios6-btn" id="btnSave">Save</button>
-          <button class="btn ios6-btn" id="btnExport">Export</button>
-          <label class="btn filebtn ios6-btn">
+          <button class="ios6-btn primary" id="btnCompute">Compute</button>
+          <button class="ios6-btn" id="btnExport">Export</button>
+          <label class="ios6-btn filebtn">
             Import
             <input id="importFile" type="file" accept="application/json" />
           </label>
@@ -100,10 +95,6 @@
           <label>Note (optional)</label>
           <input id="note" type="text" placeholder="e.g., tickets soon" />
         </div>
-      </div>
-
-      <div class="note">
-        Results assume: <b>credit cards paid in full</b> on due day; <b>LOC minimum</b> = interest-only (APR required).
       </div>
     </section>
 
@@ -142,31 +133,12 @@
         </thead>
         <tbody id="futureTbody"></tbody>
       </table>
-
-      <div class="divider"></div>
-
-      <div class="section-title">
-        <div class="h">What-if purchase</div>
-        <button class="ios6-btn primary" id="btnWhatIf">Check</button>
-      </div>
-
-      <div class="grid">
-        <div class="field">
-          <label>Date</label>
-          <input id="wDate" type="date" />
-        </div>
-        <div class="field">
-          <label>Amount</label>
-          <input id="wAmount" type="number" step="0.01" />
-        </div>
-      </div>
-      <div class="note" id="whatIfOut"></div>
     </section>
 
     <!-- RESULTS -->
     <section class="card hidden ios6-card" id="tab-results">
       <div class="section-title">
-        <div class="h">Results</div>
+        <div class="h">Decision</div>
         <button class="ios6-btn" id="btnToggleTable">Toggle timeline</button>
       </div>
 
@@ -200,7 +172,7 @@
       <div class="section-title">
         <div>
           <div class="h">Settings</div>
-          <div class="muted small">Rarely change. Defaults are safe.</div>
+          <div class="muted small">Names/cards/limits. Rarely change.</div>
         </div>
         <button class="ios6-btn danger" id="btnResetAll">Reset device data</button>
       </div>
@@ -235,7 +207,7 @@
     </section>
   </div>
 
-  <!-- SIDEBAR (ads only here) -->
+  <!-- SIDEBAR -->
   <div class="backdrop hidden" id="backdrop"></div>
   <aside class="drawer hidden" id="drawer">
     <div class="drawer-head">
@@ -245,7 +217,7 @@
 
     <div class="drawer-card">
       <div class="muted small">Support</div>
-      <div class="small">This app runs locally. Export your data often.</div>
+      <div class="small">Export your data often.</div>
     </div>
 
     <div class="drawer-card">
