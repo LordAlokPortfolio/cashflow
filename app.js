@@ -708,7 +708,7 @@ function renderQuiz(st){
     inputEl.value = (preset ?? (step.type==="date" ? "" : 0));
   }
 
-  inputEl.style.width = "100%";
+  inputEl.style.width = "100%"; inputEl.style.maxWidth = "420px"; inputEl.style.display = "block"; inputEl.style.margin = "0 auto";
   inputEl.style.padding = "11px 12px";
   inputEl.style.borderRadius = "14px";
   inputEl.style.border = "1px solid var(--stroke)";
