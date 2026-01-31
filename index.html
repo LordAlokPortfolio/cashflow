@@ -10,40 +10,73 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 
-<body>
+<body class="ios6-wallpaper">
   <div class="wrap">
-    <div class="topbar">
-      <div class="brand">
-        <div class="brand-title">House Cashflow</div>
-        <div class="brand-sub">Local-only. No bank APIs. No accounts.</div>
-      </div>
-      <div class="top-actions">
-        <button class="btn" id="btnSidebar">☰</button>
-        <button class="btn" id="btnTheme">Toggle theme</button>
+
+    <!-- iOS 6 style top bar -->
+    <div class="ios6-navbar">
+      <div class="ios6-title">House Cashflow</div>
+      <div class="ios6-actions">
+        <button class="ios6-btn" id="btnSidebar">☰</button>
+        <button class="ios6-btn" id="btnTheme">Theme</button>
       </div>
     </div>
 
-    <div class="seg" role="tablist">
-      <button class="active" data-tab="today">Today</button>
-      <button data-tab="future">Future</button>
-      <button data-tab="results">Results</button>
-      <button data-tab="settings">Settings</button>
+    <!-- Tabs (Setup is the entry point until completed) -->
+    <div class="seg ios6-seg" role="tablist">
+      <button class="active" data-tab="setup" id="tabBtnSetup">Setup</button>
+      <button data-tab="today" id="tabBtnToday">Today</button>
+      <button data-tab="future" id="tabBtnFuture">Future</button>
+      <button data-tab="results" id="tabBtnResults">Results</button>
+      <button data-tab="settings" id="tabBtnSettings">Settings</button>
     </div>
 
     <div class="spacer"></div>
 
+    <!-- SETUP (QUIZ) -->
+    <section class="card ios6-card" id="tab-setup">
+      <div class="section-title">
+        <div>
+          <div class="h">Setup (one question at a time)</div>
+          <div class="muted small">Answer each step. Finish → Decision screen.</div>
+        </div>
+      </div>
+
+      <div class="ios6-quiz">
+        <div class="ios6-quiz-top">
+          <div class="ios6-progress" id="quizProgress">Step 1 of 1</div>
+          <div class="ios6-progressbar">
+            <div class="ios6-progressbar-fill" id="quizProgressFill" style="width:0%"></div>
+          </div>
+        </div>
+
+        <div class="ios6-quiz-card">
+          <div class="ios6-quiz-q" id="quizQuestion">Question</div>
+          <div class="ios6-quiz-reason" id="quizReason">Reason</div>
+          <div class="ios6-quiz-input" id="quizInput"></div>
+        </div>
+
+        <div class="ios6-quiz-nav">
+          <button class="ios6-btn" id="quizBack">Back</button>
+          <button class="ios6-btn primary" id="quizNext">Next</button>
+        </div>
+
+        <div class="note" id="quizNote"></div>
+      </div>
+    </section>
+
     <!-- TODAY -->
-    <section class="card" id="tab-today">
+    <section class="card hidden ios6-card" id="tab-today">
       <div class="section-title">
         <div>
           <div class="h">Today (enter from apps)</div>
           <div class="muted small">Fill only what exists for you. Leave unknown as 0.</div>
         </div>
         <div class="row">
-          <button class="btn primary" id="btnCompute">Compute</button>
-          <button class="btn" id="btnSave">Save</button>
-          <button class="btn" id="btnExport">Export</button>
-          <label class="btn filebtn">
+          <button class="btn primary ios6-btn primary" id="btnCompute">Compute</button>
+          <button class="btn ios6-btn" id="btnSave">Save</button>
+          <button class="btn ios6-btn" id="btnExport">Export</button>
+          <label class="btn filebtn ios6-btn">
             Import
             <input id="importFile" type="file" accept="application/json" />
           </label>
@@ -75,10 +108,10 @@
     </section>
 
     <!-- FUTURE -->
-    <section class="card hidden" id="tab-future">
+    <section class="card hidden ios6-card" id="tab-future">
       <div class="section-title">
         <div class="h">Future expenses</div>
-        <button class="btn" id="btnAddFuture">Add</button>
+        <button class="ios6-btn" id="btnAddFuture">Add</button>
       </div>
 
       <div class="grid">
@@ -114,7 +147,7 @@
 
       <div class="section-title">
         <div class="h">What-if purchase</div>
-        <button class="btn primary" id="btnWhatIf">Check</button>
+        <button class="ios6-btn primary" id="btnWhatIf">Check</button>
       </div>
 
       <div class="grid">
@@ -131,10 +164,10 @@
     </section>
 
     <!-- RESULTS -->
-    <section class="card hidden" id="tab-results">
+    <section class="card hidden ios6-card" id="tab-results">
       <div class="section-title">
         <div class="h">Results</div>
-        <button class="btn" id="btnToggleTable">Toggle timeline</button>
+        <button class="ios6-btn" id="btnToggleTable">Toggle timeline</button>
       </div>
 
       <div id="decisionCard"></div>
@@ -163,13 +196,13 @@
     </section>
 
     <!-- SETTINGS -->
-    <section class="card hidden" id="tab-settings">
+    <section class="card hidden ios6-card" id="tab-settings">
       <div class="section-title">
         <div>
           <div class="h">Settings</div>
           <div class="muted small">Rarely change. Defaults are safe.</div>
         </div>
-        <button class="btn danger" id="btnResetAll">Reset device data</button>
+        <button class="ios6-btn danger" id="btnResetAll">Reset device data</button>
       </div>
 
       <div class="grid">
@@ -190,8 +223,8 @@
       <div class="divider"></div>
 
       <div class="section-title">
-        <div class="h">People (N-supported, default 2)</div>
-        <button class="btn" id="btnAddPerson">Add person</button>
+        <div class="h">People (N-supported)</div>
+        <button class="ios6-btn" id="btnAddPerson">Add person</button>
       </div>
 
       <div id="peopleManage"></div>
@@ -207,7 +240,7 @@
   <aside class="drawer hidden" id="drawer">
     <div class="drawer-head">
       <div class="h">Menu</div>
-      <button class="btn" id="btnCloseDrawer">Close</button>
+      <button class="ios6-btn" id="btnCloseDrawer">Close</button>
     </div>
 
     <div class="drawer-card">
