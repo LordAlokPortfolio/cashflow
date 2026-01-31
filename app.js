@@ -1,5 +1,6 @@
 const LS = "cashflow_npeople_v1";
 
+/* ---------- DOM helpers ---------- */
 const qs = (sel) => document.querySelector(sel);
 const qsa = (sel) => Array.from(document.querySelectorAll(sel));
 const el = (id) => document.getElementById(id);
@@ -33,20 +34,21 @@ function nextPayFromLast(today, lastPay, everyDays){
   return cand;
 }
 
+/* ---------- storage ---------- */
 function load(){
   const raw = localStorage.getItem(LS);
   if (!raw) return null;
   try { return JSON.parse(raw); } catch { return null; }
 }
-function save(st){
-  localStorage.setItem(LS, JSON.stringify(st));
-}
+function save(st){ localStorage.setItem(LS, JSON.stringify(st)); }
 
 function defaultState(){
   const td = new Date(); td.setHours(0,0,0,0);
   const fallback = toISO(addDays(td, -14));
   return {
     theme: "dark",
+    mode: "setup",         // setup -> run
+    quizStep: 0,
     settings: {
       payEveryDays: 14,
       horizonDays: 90,
@@ -67,7 +69,6 @@ function defaultState(){
         perPayObligationLabel: "Per-pay obligation",
         perPayObligationAmount: 0,
         debts: [
-          // CC = pay full statement; LOC = minimum interest-only
           { id: crypto.randomUUID(), label: "Card 1", type: "cc", dueDay: 16, balance: 0, apr: 0 },
           { id: crypto.randomUUID(), label: "LOC", type: "loc", dueDay: 8, balance: 0, apr: 0 }
         ]
@@ -89,15 +90,23 @@ function defaultState(){
   };
 }
 
+/* ---------- tabs/drawer/theme ---------- */
 function mountTabs(){
   qsa(".seg button").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       const tab = btn.dataset.tab;
       qsa(".seg button").forEach(b=>b.classList.toggle("active", b===btn));
-      ["today","future","results","settings"].forEach(t=>{
+      ["setup","today","future","results","settings"].forEach(t=>{
         el("tab-"+t).classList.toggle("hidden", t !== tab);
       });
     });
+  });
+}
+
+function showTab(tab){
+  qsa(".seg button").forEach(b=>b.classList.toggle("active", b.dataset.tab===tab));
+  ["setup","today","future","results","settings"].forEach(t=>{
+    el("tab-"+t).classList.toggle("hidden", t !== tab);
   });
 }
 
@@ -113,15 +122,16 @@ function mountTheme(st){
   const apply = (t)=> document.documentElement.setAttribute("data-theme", t);
   apply(st.theme || "dark");
   el("btnTheme").addEventListener("click", ()=>{
+    const s = load() || defaultState();
     const cur = document.documentElement.getAttribute("data-theme") || "dark";
     const next = (cur === "dark") ? "light" : "dark";
     document.documentElement.setAttribute("data-theme", next);
-    const s = load() || defaultState();
     s.theme = next;
     save(s);
   });
 }
 
+/* ---------- render Today/Future/Settings ---------- */
 function renderToday(st){
   const root = el("peopleToday");
   root.innerHTML = "";
@@ -175,7 +185,6 @@ function renderToday(st){
     });
   });
 
-  // Shared inputs
   el("rentAmount").value = st.shared.rentAmount || 0;
   el("cashBuffer").value = st.shared.cashBuffer || 0;
   el("note").value = st.shared.note || "";
@@ -190,7 +199,7 @@ function renderFuture(st){
       <td>${it.date}</td>
       <td>${it.label || ""}</td>
       <td class="right">${fmt(it.amount)}</td>
-      <td class="right"><button class="btn danger" data-del="${i}" style="padding:8px 10px;">Delete</button></td>
+      <td class="right"><button class="btn danger ios6-btn danger" data-del="${i}" style="padding:8px 10px;">Delete</button></td>
     `;
     tbody.appendChild(tr);
   });
@@ -219,7 +228,7 @@ function renderSettings(st){
     card.innerHTML = `
       <div class="section-title">
         <div class="h">${p.name}</div>
-        <button class="btn danger" data-delperson="${p.id}">Delete</button>
+        <button class="btn danger ios6-btn danger" data-delperson="${p.id}">Delete</button>
       </div>
 
       <div class="grid">
@@ -240,7 +249,7 @@ function renderSettings(st){
       <div class="divider"></div>
       <div class="section-title">
         <div class="h">Debts</div>
-        <button class="btn" data-adddebt="${p.id}">Add debt</button>
+        <button class="btn ios6-btn" data-adddebt="${p.id}">Add debt</button>
       </div>
 
       <table>
@@ -274,7 +283,7 @@ function renderSettings(st){
         <td><input data-p="${p.id}" data-debt="${d.id}" data-k="dueDay" type="number" min="1" max="31" value="${d.dueDay || 0}"></td>
         <td><input data-p="${p.id}" data-debt="${d.id}" data-k="apr" type="number" step="0.01" value="${d.apr || 0}"></td>
         <td class="right"><input data-p="${p.id}" data-debt="${d.id}" data-k="balance" type="number" step="0.01" value="${d.balance || 0}"></td>
-        <td class="right"><button class="btn danger" data-deldebt="${p.id}:${d.id}" style="padding:8px 10px;">Delete</button></td>
+        <td class="right"><button class="btn danger ios6-btn danger" data-deldebt="${p.id}:${d.id}" style="padding:8px 10px;">Delete</button></td>
       `;
       dt.appendChild(tr);
     });
@@ -306,7 +315,6 @@ function renderSettings(st){
     });
   });
 
-  // Global controls
   el("btnAddPerson").onclick = ()=>{
     const st2 = load() || defaultState();
     st2.people.push({
@@ -324,22 +332,20 @@ function renderSettings(st){
   };
 }
 
+/* ---------- input handlers (unchanged core storage behavior) ---------- */
 function attachInputHandlers(){
   document.body.addEventListener("input", (e)=>{
     const t = e.target;
     const st = load() || defaultState();
 
-    // Shared fields
     if (t.id === "rentAmount") st.shared.rentAmount = Number(t.value||0);
     if (t.id === "cashBuffer") st.shared.cashBuffer = Number(t.value||0);
     if (t.id === "note") st.shared.note = t.value || "";
 
-    // Settings fields
     if (t.id === "payEveryDays") st.settings.payEveryDays = Number(t.value||14);
     if (t.id === "horizonDays") st.settings.horizonDays = Number(t.value||90);
     if (t.id === "rentDueDay") st.settings.rentDueDay = Number(t.value||28);
 
-    // People fields
     const pid = t.dataset.p;
     if (pid){
       const p = st.people.find(x=>x.id===pid);
@@ -368,6 +374,7 @@ function attachInputHandlers(){
   });
 }
 
+/* ---------- CORE engine (unchanged decision semantics) ---------- */
 function compute(st){
   const today = new Date(); today.setHours(0,0,0,0);
   const every = st.settings.payEveryDays || 14;
@@ -393,13 +400,13 @@ function compute(st){
     }
   });
 
-  // Shared rent
+  // Shared rent (next occurrence only; user re-enters each month if needed)
   const rentDue = nextDueByDay(today, st.settings.rentDueDay);
   if (rentDue && (st.shared.rentAmount||0) > 0){
     events.push({ date: toISO(rentDue), name: `Rent`, inflow: 0, outflow: Number(st.shared.rentAmount||0) });
   }
 
-  // Debts due (CC full; LOC minimum interest-only)
+  // Debts due: CC full; LOC minimum interest-only
   st.people.forEach(p=>{
     p.debts.forEach(d=>{
       if (!d.dueDay || d.dueDay < 1) return;
@@ -411,7 +418,6 @@ function compute(st){
       if (d.type === "cc"){
         events.push({ date: toISO(due), name: `${p.name}: ${d.label} (CC full)`, inflow: 0, outflow: bal });
       } else {
-        // LOC minimum = interest-only
         const apr = Number(d.apr||0);
         const minPay = (apr > 0) ? (bal * (apr/100) / 12) : 0;
         if (apr <= 0) warnings.push(`${p.name}: ${d.label} is LOC but APR is 0 → minimum assumed 0`);
@@ -427,7 +433,7 @@ function compute(st){
     }
   });
 
-  // Sort events
+  // Sort
   events.sort((a,b)=>{
     if (a.date !== b.date) return a.date.localeCompare(b.date);
     return (b.inflow - a.inflow) || (a.outflow - b.outflow);
@@ -454,7 +460,6 @@ function compute(st){
       return { ...e, balance: bal };
     });
 
-  // Next household pay = earliest next pay among people
   const nextPays = st.people
     .map(p=>parseISO(p.lastPayDate))
     .filter(Boolean)
@@ -497,7 +502,7 @@ function renderResults(st, model){
   }
 
   el("decisionCard").innerHTML = `
-    <div class="kpi" style="grid-column: span 12;">
+    <div class="kpi" style="grid-column: span 3;">
       <div class="t">Decision</div>
       <div class="v ${verdict==="SAFE" ? "good" : "bad"}">${verdict}</div>
       <div class="small">${reason}</div>
@@ -505,7 +510,6 @@ function renderResults(st, model){
     </div>
   `;
 
-  // KPI grid
   const surplus1 = (model.cashStart + model.inflow1) - model.out1;
   const surplus2 = (model.cashStart + model.inflow2) - model.out2;
 
@@ -518,7 +522,6 @@ function renderResults(st, model){
     <div class="kpi"><div class="t">Horizon</div><div class="v">${st.settings.horizonDays}d</div><div class="small muted">Pay cycle: ${st.settings.payEveryDays}d</div></div>
   `;
 
-  // timeline
   const tbody = el("eventsTbody");
   tbody.innerHTML = "";
   model.rows.forEach(r=>{
@@ -534,12 +537,12 @@ function renderResults(st, model){
     tbody.appendChild(tr);
   });
 
-  // warnings
   el("warnings").innerHTML = model.warnings.length
     ? `<b>Warnings:</b><br>${model.warnings.map(w=>"- "+w).join("<br>")}`
     : "";
 }
 
+/* ---------- export/import ---------- */
 function exportJSON(){
   const st = load() || defaultState();
   const blob = new Blob([JSON.stringify(st,null,2)], {type:"application/json"});
@@ -558,39 +561,223 @@ async function importJSON(file){
   boot();
 }
 
-function boot(){
-  let st = load();
-  if (!st) st = defaultState();
+/* ---------- QUIZ (Setup Wizard) ---------- */
+/*
+  First version: asks EVERYTHING in quiz format, then jumps to Results.
+  It writes directly into the same state the engine already uses.
+*/
+function buildQuiz(st){
+  const p1 = st.people[0];
+  const p2 = st.people[1];
 
-  // theme
-  document.documentElement.setAttribute("data-theme", st.theme || "dark");
+  // helper: ensure at least 2 people exist
+  while (st.people.length < 2){
+    st.people.push({
+      id: crypto.randomUUID(),
+      name: `Person ${st.people.length+1}`,
+      lastPayDate: toISO(addDays(new Date(), -14)),
+      payAmount: 0,
+      cash: 0,
+      perPayObligationLabel: "Per-pay obligation",
+      perPayObligationAmount: 0,
+      debts: [{ id: crypto.randomUUID(), label:"Card 1", type:"cc", dueDay:0, balance:0, apr:0 }]
+    });
+  }
 
-  // settings inputs
-  el("payEveryDays").value = st.settings.payEveryDays;
-  el("horizonDays").value = st.settings.horizonDays;
-  el("rentDueDay").value = st.settings.rentDueDay;
+  const steps = [
+    // Household basics
+    { key:"people.0.name", type:"text", q:"What is Person 1 name?", reason:"Names reduce friction. Labels don’t change math." },
+    { key:"people.1.name", type:"text", q:"What is Person 2 name?", reason:"Same engine, different boundary conditions." },
 
-  // shared
-  el("rentAmount").value = st.shared.rentAmount || 0;
-  el("cashBuffer").value = st.shared.cashBuffer || 0;
-  el("note").value = st.shared.note || "";
+    { key:"settings.payEveryDays", type:"number", q:"Pay cycle in days?", reason:"Your inflow rhythm.", min:1, preset:14 },
+    { key:"settings.horizonDays", type:"number", q:"Projection horizon in days?", reason:"How far ahead to check risk.", min:14, preset:90 },
 
-  renderToday(st);
-  renderFuture(st);
-  renderSettings(st);
+    // Rent
+    { key:"shared.rentAmount", type:"money", q:"Rent amount?", reason:"Rent is usually the dominant fixed constraint." },
+    { key:"settings.rentDueDay", type:"number", q:"Rent due day (1–31)?", reason:"Used to schedule the next rent event.", min:1, max:31, preset:28 },
 
-  // compute once
-  const model = compute(st);
-  renderResults(st, model);
+    // Person 1 pay + cash
+    { key:"people.0.lastPayDate", type:"date", q:"Person 1 last pay date?", reason:"All future pay dates derive from this." },
+    { key:"people.0.payAmount", type:"money", q:"Person 1 pay amount (per pay)?", reason:"Primary inflow." },
+    { key:"people.0.cash", type:"money", q:"Person 1 cash on hand (optional)?", reason:"Starting buffer improves accuracy.", optional:true },
 
-  // SW register
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./service-worker.js");
+    // Person 1 per-pay obligation
+    { key:"people.0.perPayObligationLabel", type:"text", q:"Person 1 per-pay obligation label?", reason:"Example: car loan, lease, etc.", preset:"Car loan" },
+    { key:"people.0.perPayObligationAmount", type:"money", q:"Person 1 per-pay obligation amount?", reason:"Deducted every pay date.", preset:0 },
+
+    // Person 1 Debt 1 (CC)
+    { key:"people.0.debts.0.label", type:"text", q:"Person 1 Card #1 name?", reason:"Example: AMEX, Scotia, CIBC." , preset:"AMEX"},
+    { key:"people.0.debts.0.type", type:"select", q:"Person 1 Card #1 type?", reason:"CC must be paid in full by due day.", options:["cc","loc"], preset:"cc"},
+    { key:"people.0.debts.0.dueDay", type:"number", q:"Person 1 Card #1 due day (1–31)?", reason:"Used for the next due event.", min:1, max:31, preset:16 },
+    { key:"people.0.debts.0.apr", type:"number", q:"APR% (only matters if LOC)", reason:"LOC minimum = interest-only.", preset:0 },
+    { key:"people.0.debts.0.balance", type:"money", q:"Statement/balance amount?", reason:"Amount due on the due day.", preset:0 },
+
+    // Person 1 Debt 2 (LOC default exists)
+    { key:"people.0.debts.1.label", type:"text", q:"Person 1 Debt #2 name?", reason:"Example: LOC.", preset:"LOC" },
+    { key:"people.0.debts.1.type", type:"select", q:"Person 1 Debt #2 type?", reason:"LOC treated as minimum interest-only.", options:["cc","loc"], preset:"loc"},
+    { key:"people.0.debts.1.dueDay", type:"number", q:"Person 1 Debt #2 due day (1–31)?", reason:"Used for the next due event.", min:1, max:31, preset:8 },
+    { key:"people.0.debts.1.apr", type:"number", q:"APR% for LOC?", reason:"Required for LOC minimum payment.", preset:9 },
+    { key:"people.0.debts.1.balance", type:"money", q:"LOC balance?", reason:"Used to compute interest-only minimum.", preset:0 },
+
+    // Person 2 pay + cash
+    { key:"people.1.lastPayDate", type:"date", q:"Person 2 last pay date?", reason:"Second inflow stream." },
+    { key:"people.1.payAmount", type:"money", q:"Person 2 pay amount (per pay)?", reason:"Second inflow stream." },
+    { key:"people.1.cash", type:"money", q:"Person 2 cash on hand (optional)?", reason:"Starting buffer improves accuracy.", optional:true },
+
+    // Person 2 per-pay obligation
+    { key:"people.1.perPayObligationLabel", type:"text", q:"Person 2 per-pay obligation label?", reason:"Example: car lease.", preset:"Car lease" },
+    { key:"people.1.perPayObligationAmount", type:"money", q:"Person 2 per-pay obligation amount?", reason:"Deducted every pay date.", preset:0 },
+
+    // Person 2 Debt 1
+    { key:"people.1.debts.0.label", type:"text", q:"Person 2 Card #1 name?", reason:"Example: CIBC, Scotia.", preset:"CIBC" },
+    { key:"people.1.debts.0.type", type:"select", q:"Person 2 Card #1 type?", reason:"CC must be paid in full by due day.", options:["cc","loc"], preset:"cc"},
+    { key:"people.1.debts.0.dueDay", type:"number", q:"Person 2 Card #1 due day (1–31)?", reason:"Used for the next due event.", min:1, max:31, preset:5 },
+    { key:"people.1.debts.0.apr", type:"number", q:"APR% (only matters if LOC)", reason:"Leave 0 if CC.", preset:0 },
+    { key:"people.1.debts.0.balance", type:"money", q:"Statement balance?", reason:"Amount due on the due day.", preset:0 },
+
+    // Shared extras
+    { key:"shared.cashBuffer", type:"money", q:"House cash buffer (optional)?", reason:"If you want the app to be strict, keep 0.", optional:true },
+    { key:"shared.note", type:"text", q:"Optional note?", reason:"For your own context.", optional:true, preset:"" },
+  ];
+
+  return steps;
 }
 
+function getByPath(obj, path){
+  return path.split(".").reduce((acc, k)=> (acc==null ? acc : acc[k]), obj);
+}
+function setByPath(obj, path, value){
+  const parts = path.split(".");
+  let cur = obj;
+  for (let i=0; i<parts.length-1; i++){
+    const key = parts[i];
+    if (cur[key] == null) cur[key] = {};
+    cur = cur[key];
+  }
+  cur[parts[parts.length-1]] = value;
+}
+
+function ensureDebts(st){
+  // ensure default debts exist for first 2 people
+  for (let i=0;i<2;i++){
+    if (!st.people[i].debts) st.people[i].debts = [];
+    while (st.people[i].debts.length < 2 && i===0){
+      st.people[i].debts.push({ id: crypto.randomUUID(), label:"New debt", type:"cc", dueDay:0, balance:0, apr:0 });
+    }
+    while (st.people[i].debts.length < 1 && i===1){
+      st.people[i].debts.push({ id: crypto.randomUUID(), label:"New debt", type:"cc", dueDay:0, balance:0, apr:0 });
+    }
+  }
+}
+
+function renderQuiz(st){
+  ensureDebts(st);
+  const steps = buildQuiz(st);
+  const i = Math.max(0, Math.min(st.quizStep || 0, steps.length-1));
+  st.quizStep = i;
+  save(st);
+
+  const step = steps[i];
+  el("quizProgress").textContent = `Step ${i+1} of ${steps.length}`;
+  el("quizProgressFill").style.width = `${Math.round(((i+1)/steps.length)*100)}%`;
+  el("quizQuestion").textContent = step.q;
+  el("quizReason").textContent = step.reason || "";
+
+  const inputWrap = el("quizInput");
+  inputWrap.innerHTML = "";
+
+  const currentVal = getByPath(st, step.key);
+  const preset = (currentVal == null || currentVal === "" || (typeof currentVal === "number" && isNaN(currentVal)))
+    ? (step.preset ?? currentVal)
+    : currentVal;
+
+  let inputEl;
+
+  if (step.type === "select"){
+    inputEl = document.createElement("select");
+    inputEl.className = "ios6-input";
+    inputEl.innerHTML = step.options.map(o=>`<option value="${o}">${o.toUpperCase()}</option>`).join("");
+    inputEl.value = preset ?? step.options[0];
+  } else {
+    inputEl = document.createElement("input");
+    inputEl.type = (step.type === "date") ? "date" : (step.type === "text" ? "text" : "number");
+    if (step.type === "money") inputEl.step = "0.01";
+    if (step.type === "number") inputEl.step = "1";
+    if (step.min != null) inputEl.min = String(step.min);
+    if (step.max != null) inputEl.max = String(step.max);
+    inputEl.value = (preset ?? (step.type==="date" ? "" : 0));
+  }
+
+  inputEl.style.width = "100%";
+  inputEl.style.padding = "11px 12px";
+  inputEl.style.borderRadius = "14px";
+  inputEl.style.border = "1px solid var(--stroke)";
+  inputEl.style.background = "rgba(0,0,0,.12)";
+  inputEl.style.color = "var(--text)";
+
+  inputWrap.appendChild(inputEl);
+
+  el("quizBack").disabled = (i===0);
+  el("quizNext").textContent = (i === steps.length-1) ? "Finish" : "Next";
+
+  el("quizNote").textContent = "";
+}
+
+function commitQuizAnswer(st){
+  const steps = buildQuiz(st);
+  const i = st.quizStep || 0;
+  const step = steps[i];
+  const inputWrap = el("quizInput");
+  const control = inputWrap.querySelector("input, select");
+  if (!control) return true;
+
+  let val = control.value;
+
+  if (step.type === "money" || step.type === "number"){
+    val = Number(val || 0);
+  }
+
+  if (step.type === "date"){
+    val = (val || "");
+  }
+
+  // optional field allows blank; else require something sensible
+  if (!step.optional){
+    if (step.type === "text" && String(val).trim() === ""){
+      el("quizNote").innerHTML = `<span class="bad">Required.</span>`;
+      return false;
+    }
+    if ((step.type === "money" || step.type === "number") && (val == null || isNaN(val))){
+      el("quizNote").innerHTML = `<span class="bad">Enter a number.</span>`;
+      return false;
+    }
+    if (step.type === "date" && String(val).trim() === ""){
+      el("quizNote").innerHTML = `<span class="bad">Pick a date.</span>`;
+      return false;
+    }
+  }
+
+  setByPath(st, step.key, val);
+  save(st);
+  return true;
+}
+
+function finishQuiz(st){
+  st.mode = "run";
+  st.quizStep = 0;
+  save(st);
+
+  // Render normal UI and jump straight to Results with decision
+  boot();
+  const model = compute(st);
+  renderResults(st, model);
+  showTab("results");
+}
+
+/* ---------- buttons ---------- */
 function wireButtons(){
   el("btnCompute").onclick = ()=>{
     const st = load() || defaultState();
-    // update shared from visible fields
     st.shared.rentAmount = Number(el("rentAmount").value||0);
     st.shared.cashBuffer = Number(el("cashBuffer").value||0);
     st.shared.note = el("note").value || "";
@@ -598,20 +785,29 @@ function wireButtons(){
 
     const model = compute(st);
     renderResults(st, model);
-
-    // jump to results
-    qsa(".seg button").forEach(b=>b.classList.toggle("active", b.dataset.tab==="results"));
-    ["today","future","results","settings"].forEach(t=> el("tab-"+t).classList.toggle("hidden", t!=="results"));
+    showTab("results");
   };
 
-  el("btnSave").onclick = ()=>{ /* state is saved on input */ };
+  el("btnSave").onclick = ()=>{ /* saved on input */ };
 
-  el("btnExport").onclick = exportJSON;
+  el("btnExport").onclick = ()=>{
+    const st = load() || defaultState();
+    const blob = new Blob([JSON.stringify(st,null,2)], {type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "cashflow-backup.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   el("importFile").addEventListener("change", async (e)=>{
     const f = e.target.files?.[0];
     if (!f) return;
-    await importJSON(f);
+    const txt = await f.text();
+    const st = JSON.parse(txt);
+    save(st);
+    boot();
     e.target.value = "";
   });
 
@@ -652,16 +848,93 @@ function wireButtons(){
     localStorage.removeItem(LS);
     location.reload();
   };
+
+  // Quiz nav
+  el("quizBack").onclick = ()=>{
+    const st = load() || defaultState();
+    if (st.quizStep > 0) st.quizStep -= 1;
+    save(st);
+    renderQuiz(st);
+  };
+
+  el("quizNext").onclick = ()=>{
+    const st = load() || defaultState();
+    if (!commitQuizAnswer(st)) return;
+
+    const steps = buildQuiz(st);
+    if ((st.quizStep || 0) >= steps.length-1){
+      finishQuiz(st);
+      return;
+    }
+    st.quizStep = (st.quizStep || 0) + 1;
+    save(st);
+    renderQuiz(st);
+  };
+}
+
+/* ---------- boot ---------- */
+function boot(){
+  let st = load();
+  if (!st) st = defaultState();
+
+  document.documentElement.setAttribute("data-theme", st.theme || "dark");
+
+  // settings fields
+  el("payEveryDays").value = st.settings.payEveryDays;
+  el("horizonDays").value = st.settings.horizonDays;
+  el("rentDueDay").value = st.settings.rentDueDay;
+
+  // shared
+  el("rentAmount").value = st.shared.rentAmount || 0;
+  el("cashBuffer").value = st.shared.cashBuffer || 0;
+  el("note").value = st.shared.note || "";
+
+  renderToday(st);
+  renderFuture(st);
+  renderSettings(st);
+
+  // compute once
+  const model = compute(st);
+  renderResults(st, model);
+
+  // service worker
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./service-worker.js");
+
+  // mode routing
+  if (st.mode === "setup"){
+    // hide non-setup tabs (optional; but keeps focus)
+    el("tabBtnToday").disabled = true;
+    el("tabBtnFuture").disabled = true;
+    el("tabBtnResults").disabled = true;
+    el("tabBtnSettings").disabled = true;
+
+    showTab("setup");
+    renderQuiz(st);
+  } else {
+    el("tabBtnToday").disabled = false;
+    el("tabBtnFuture").disabled = false;
+    el("tabBtnResults").disabled = false;
+    el("tabBtnSettings").disabled = false;
+
+    // start on Results (decision-first)
+    showTab("results");
+  }
+}
+
+function mountTabsAndNav(){
+  mountTabs();
+  mountDrawer();
 }
 
 (function init(){
-  mountTabs();
-  mountDrawer();
+  mountTabsAndNav();
   attachInputHandlers();
-  wireButtons();
 
-  const st = load() || defaultState();
+  let st = load();
+  if (!st) st = defaultState();
+
   mountTheme(st);
   save(st);
+  wireButtons();
   boot();
 })();
