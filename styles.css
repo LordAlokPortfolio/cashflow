@@ -196,3 +196,30 @@ input, select, textarea { max-width: 100%; }
 .ios6-quiz-input { overflow: hidden; }
 table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 /* Scrollbar hide for WebKit */
+
+/* ===== Mobile hard lock (prevents spill) ===== */
+html, body { overflow-x: hidden; }
+.wrap { overflow-x: hidden; }
+
+/* Long text should wrap instead of forcing width */
+.card, .note, .ios6-quiz-card, .drawer, td, th {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Make quiz input area always constrained and centered */
+.ios6-quiz-input {
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+/* Inputs/buttons never exceed viewport width */
+input, select, textarea, button {
+  max-width: 100%;
+}
+
+/* If segmented tabs get too wide, allow wrapping */
+.seg { flex-wrap: wrap; }
+
+/* iOS Safari: prevent zoom layout glitches */
+input, select, textarea { font-size: 16px; }

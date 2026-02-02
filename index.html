@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>House Cashflow</title>
+  <title>Next Bill</title>
   <meta name="theme-color" content="#0b1220" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <link rel="manifest" href="manifest.json" />
@@ -13,7 +13,7 @@
 <body class="ios6-wallpaper">
   <div class="wrap">
     <div class="ios6-navbar">
-      <div class="ios6-title">House Cashflow</div>
+      <div class="ios6-title">Next Bill</div>
       <div class="ios6-actions">
         <button class="ios6-btn" id="btnSidebar">☰</button>
         <button class="ios6-btn" id="btnTheme">Theme</button>
@@ -35,13 +35,13 @@
       <div class="section-title">
         <div>
           <div class="h">Setup (one question at a time)</div>
-          <div class="muted small">Finish → Decision screen.</div>
+          <div class="muted small">Finish → Decision.</div>
         </div>
       </div>
 
       <div class="ios6-quiz">
         <div class="ios6-quiz-top">
-          <div class="ios6-progress" id="quizProgress">Step 1</div>
+          <div class="ios6-progress" id="quizProgress">STEP</div>
           <div class="ios6-progressbar">
             <div class="ios6-progressbar-fill" id="quizProgressFill" style="width:0%"></div>
           </div>
@@ -65,8 +65,8 @@
     <section class="card hidden ios6-card" id="tab-today">
       <div class="section-title">
         <div>
-          <div class="h">Today (from apps)</div>
-          <div class="muted small">Update balances. Compute → Decision.</div>
+          <div class="h">Today (update balances)</div>
+          <div class="muted small">Then tap Compute → Decision updates.</div>
         </div>
         <div class="row">
           <button class="ios6-btn primary" id="btnCompute">Compute</button>
@@ -93,7 +93,7 @@
         </div>
         <div class="field">
           <label>Note (optional)</label>
-          <input id="note" type="text" placeholder="e.g., tickets soon" />
+          <input id="note" type="text" placeholder="optional" />
         </div>
       </div>
     </section>
@@ -103,6 +103,10 @@
       <div class="section-title">
         <div class="h">Future expenses</div>
         <button class="ios6-btn" id="btnAddFuture">Add</button>
+      </div>
+
+      <div class="note">
+        Add expenses here. When done, go to <b>Today</b> and tap <b>Compute</b> to refresh the Decision.
       </div>
 
       <div class="grid">
@@ -138,14 +142,14 @@
     <!-- RESULTS -->
     <section class="card hidden ios6-card" id="tab-results">
       <div class="section-title">
-        <div class="h">Results</div>
+        <div class="h">Decision</div>
         <button class="ios6-btn" id="btnToggleDetails">Show details</button>
       </div>
 
-      <!-- TEXT-ONLY DECISION OUTPUT (ALWAYS VISIBLE) -->
+      <!-- TEXT ONLY OUTPUT -->
       <div class="card" id="decisionText"></div>
 
-      <!-- DETAILS (HIDDEN BY DEFAULT) -->
+      <!-- DETAILS (HIDDEN) -->
       <div id="detailsWrap" class="hidden" style="margin-top:12px;">
         <div class="kpis" id="kpiGrid"></div>
 
@@ -171,13 +175,12 @@
       </div>
     </section>
 
-
     <!-- SETTINGS -->
     <section class="card hidden ios6-card" id="tab-settings">
       <div class="section-title">
         <div>
           <div class="h">Settings</div>
-          <div class="muted small">Names/cards/limits. Rarely change.</div>
+          <div class="muted small">Change names/cards/limits.</div>
         </div>
         <button class="ios6-btn danger" id="btnResetAll">Reset device data</button>
       </div>
