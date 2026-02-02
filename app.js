@@ -539,14 +539,45 @@ function compute(st){
 }
 
 function renderResults(st, model){
+  // --- helpers for decision-only output ---
+  function locCapacity(st){
+    let totalAvail = 0;
+    const locs = [];
+
+    st.people.forEach(p=>{
+      (p.debts||[]).forEach(d=>{
+        if (d.type !== "loc") return;
+        const lim = Number(d.creditLimit||0);
+        const bal = Number(d.balance||0);
+        const avail = Math.max(0, lim - bal);
+        const apr = Number(d.apr||0);
+        totalAvail += avail;
+        locs.push({ owner:p.name, label:d.label, avail, apr });
+      });
+    });
+
+    locs.sort((a,b)=> (a.apr||999)-(b.apr||999));
+    return { totalAvail, best: locs[0] || null };
+  }
+
+  function estInterest(amount, aprPct, days){
+    if (amount <= 0 || !aprPct || aprPct <= 0 || days <= 0) return 0;
+    return amount * (aprPct/100) * (days/365);
+  }
+
+  // --- DECISION TEXT (what user sees) ---
   let verdict = "SAFE";
-  let reason = "All required bills fit.";
-  let action = "Proceed.";
+  let blockingName = "";
+  let blockingDate = "";
+  let shortBy = 0;
+  let actionLine = "Pay as usual.";
+  let interestLine = "";
 
   if (model.firstNegRow){
     verdict = "UNSAFE";
-    const shortBy = Math.abs(model.firstNegRow.balance);
-    reason = `Blocking: ${model.firstNegRow.name} on ${model.firstNegRow.date}. Short by $${fmt(shortBy)}.`;
+    blockingName = model.firstNegRow.name;
+    blockingDate = model.firstNegRow.date;
+    shortBy = Math.abs(model.firstNegRow.balance);
 
     const cap = locCapacity(st);
     if (cap.totalAvail > 0){
@@ -554,58 +585,120 @@ function renderResults(st, model){
       const best = cap.best;
       const apr = best?.apr || 0;
 
-      const blockDate = parseISO(model.firstNegRow.date);
+      const blockDate = parseISO(blockingDate);
       const nextPayDate = parseISO(model.nextPay);
       const days = Math.max(1, Math.floor((nextPayDate - blockDate)/(24*3600*1000)));
+
       const iCost = estInterest(borrow, apr, days);
 
-      action = `Borrow $${fmt(borrow)} from LOC (lowest APR: ${best.owner} • ${best.label} @ ${apr||0}%). Est. interest ≈ $${fmt(iCost)} for ${days} days.`;
-      if (borrow < shortBy) action += ` Remaining unfunded: $${fmt(shortBy-borrow)}.`;
-      if (!apr || apr<=0) action += ` (APR missing → set APR for accurate cost.)`;
+      actionLine = `Best action: Borrow $${fmt(borrow)} from LOC (lowest APR: ${best.owner} • ${best.label}).`;
+      interestLine = `Interest estimate: ~$${fmt(iCost)} for ${days} days.`;
+
+      if (borrow < shortBy){
+        actionLine += ` LOC limit is not enough. Remaining unfunded: $${fmt(shortBy - borrow)}.`;
+      }
+      if (!apr || apr<=0){
+        interestLine += ` (APR missing → set APR for accuracy.)`;
+      }
     } else {
-      action = `No LOC capacity recorded. Set LOC credit limit(s) to enable borrowing decision.`;
+      actionLine = `Best action: Borrow from LOC, but no LOC credit limit is set. Enter LOC limit + APR in Settings.`;
+      interestLine = "";
+    }
+  } else {
+    // SAFE: we still show blocking bill (next due) if possible
+    // Pick the next outflow event after today as "next bill"
+    const nextOut = (model.rows||[]).find(r => (r.outflow||0) > 0);
+    if (nextOut){
+      blockingName = nextOut.name;
+      blockingDate = nextOut.date;
     }
   }
 
-  el("decisionCard").innerHTML = `
-    <div class="kpi" style="grid-column: span 3;">
-      <div class="t">Decision</div>
-      <div class="v ${verdict==="SAFE" ? "good" : "bad"}">${verdict}</div>
-      <div class="small">${reason}</div>
-      <div class="small">${action}</div>
+  // Render the text-only decision
+  const safeTitle = `✅ DECISION: SAFE`;
+  const unsafeTitle = `❌ DECISION: UNSAFE`;
+
+  let html = `
+    <div class="h">Decision</div>
+    <div style="font-size:20px;font-weight:950;margin-top:6px;" class="${verdict==="SAFE"?"good":"bad"}">
+      ${verdict==="SAFE" ? safeTitle : unsafeTitle}
     </div>
   `;
 
+  if (blockingName && blockingDate){
+    html += `
+      <div style="margin-top:10px;">
+        <div class="muted small">Blocking bill</div>
+        <div style="font-weight:900;">${blockingName}</div>
+        <div class="small muted">Due: ${blockingDate}</div>
+      </div>
+    `;
+  }
+
+  if (verdict === "UNSAFE"){
+    html += `
+      <div style="margin-top:12px;">
+        <div class="muted small">Shortfall</div>
+        <div style="font-weight:950;">Short by: $${fmt(shortBy)}</div>
+      </div>
+      <div style="margin-top:12px;">
+        <div style="font-weight:900;">${actionLine}</div>
+        ${interestLine ? `<div class="small muted" style="margin-top:6px;">${interestLine}</div>` : ``}
+      </div>
+      <div style="margin-top:12px;font-weight:950;">
+        Final instruction: Do the above action before the due date.
+      </div>
+    `;
+  } else {
+    html += `
+      <div style="margin-top:12px;font-weight:900;">
+        Final instruction: Pay as usual.
+      </div>
+    `;
+  }
+
+  el("decisionText").innerHTML = html;
+
+  // --- DETAILS (optional) still computed but hidden by default ---
   const surplus1 = (model.cashStart + model.inflow1) - model.out1;
   const surplus2 = (model.cashStart + model.inflow2) - model.out2;
 
-  el("kpiGrid").innerHTML = `
-    <div class="kpi"><div class="t">Today</div><div class="v">${model.today}</div><div class="small muted">Start: ${fmt(model.cashStart)}</div></div>
-    <div class="kpi"><div class="t">Next pay</div><div class="v">${model.nextPay}</div><div class="small muted">Earliest pay</div></div>
-    <div class="kpi"><div class="t">By next pay</div><div class="v ${surplus1>=0?"good":"bad"}">${surplus1>=0?"+":""}${fmt(surplus1)}</div><div class="small muted">Out ≤ next pay: ${fmt(model.out1)}</div></div>
-    <div class="kpi"><div class="t">By 2nd pay</div><div class="v ${surplus2>=0?"good":"bad"}">${surplus2>=0?"+":""}${fmt(surplus2)}</div><div class="small muted">Out ≤ 2nd: ${fmt(model.out2)}</div></div>
-    <div class="kpi"><div class="t">Minimum</div><div class="v ${model.minBal>=0?"good":"bad"}">${fmt(model.minBal)}</div><div class="small muted">${model.firstNeg ? "First neg: "+model.firstNeg : "No neg in horizon"}</div></div>
-    <div class="kpi"><div class="t">Horizon</div><div class="v">${st.settings.horizonDays}d</div><div class="small muted">Cycle: ${st.settings.payEveryDays}d</div></div>
-  `;
-
-  const tbody = el("eventsTbody");
-  tbody.innerHTML = "";
-  model.rows.forEach(r=>{
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${r.date}</td><td>${r.name}</td>
-      <td class="right">${r.inflow?fmt(r.inflow):""}</td>
-      <td class="right">${r.outflow?fmt(r.outflow):""}</td>
-      <td class="right">${fmt(r.balance)}</td>
-      <td>${r.balance<0 ? '<span class="bad">NEGATIVE</span>' : ""}</td>
+  if (el("kpiGrid")){
+    el("kpiGrid").innerHTML = `
+      <div class="kpi"><div class="t">Today</div><div class="v">${model.today}</div><div class="small muted">Start: ${fmt(model.cashStart)}</div></div>
+      <div class="kpi"><div class="t">Next pay</div><div class="v">${model.nextPay}</div><div class="small muted">Earliest pay</div></div>
+      <div class="kpi"><div class="t">By next pay</div><div class="v ${surplus1>=0?"good":"bad"}">${surplus1>=0?"+":""}${fmt(surplus1)}</div><div class="small muted">Out ≤ next: ${fmt(model.out1)}</div></div>
+      <div class="kpi"><div class="t">By 2nd pay</div><div class="v ${surplus2>=0?"good":"bad"}">${surplus2>=0?"+":""}${fmt(surplus2)}</div><div class="small muted">Out ≤ 2nd: ${fmt(model.out2)}</div></div>
+      <div class="kpi"><div class="t">Minimum</div><div class="v ${model.minBal>=0?"good":"bad"}">${fmt(model.minBal)}</div><div class="small muted">${model.firstNeg ? "First neg: "+model.firstNeg : "No neg in horizon"}</div></div>
+      <div class="kpi"><div class="t">Horizon</div><div class="v">${st.settings.horizonDays}d</div><div class="small muted">Cycle: ${st.settings.payEveryDays}d</div></div>
     `;
-    tbody.appendChild(tr);
-  });
+  }
 
-  el("warnings").innerHTML = model.warnings.length
-    ? `<b>Warnings:</b><br>${model.warnings.map(w=>"- "+w).join("<br>")}`
-    : "";
+  // timeline
+  const tbody = el("eventsTbody");
+  if (tbody){
+    tbody.innerHTML = "";
+    (model.rows||[]).forEach(r=>{
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${r.date}</td><td>${r.name}</td>
+        <td class="right">${r.inflow?fmt(r.inflow):""}</td>
+        <td class="right">${r.outflow?fmt(r.outflow):""}</td>
+        <td class="right">${fmt(r.balance)}</td>
+        <td>${r.balance<0 ? '<span class="bad">NEGATIVE</span>' : ""}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  // warnings
+  if (el("warnings")){
+    el("warnings").innerHTML = (model.warnings && model.warnings.length)
+      ? `<b>Warnings:</b><br>${model.warnings.map(w=>"- "+w).join("<br>")}`
+      : "";
+  }
 }
+
 
 /* =========================================================
    QUIZ state-machine (dynamic debts)
@@ -937,7 +1030,12 @@ function wireButtons(){
   };
 
   // Toggle timeline
-  el("btnToggleTable").onclick = ()=> el("timelineWrap").classList.toggle("hidden");
+  el("btnToggleDetails").onclick = ()=>{
+  const wrap = el("detailsWrap");
+  wrap.classList.toggle("hidden");
+  el("btnToggleDetails").textContent = wrap.classList.contains("hidden") ? "Show details" : "Hide details";
+  };
+
 
   // Export/Import/Reset
   el("btnExport").onclick = ()=>{

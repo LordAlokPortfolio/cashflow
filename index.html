@@ -138,34 +138,39 @@
     <!-- RESULTS -->
     <section class="card hidden ios6-card" id="tab-results">
       <div class="section-title">
-        <div class="h">Decision</div>
-        <button class="ios6-btn" id="btnToggleTable">Toggle timeline</button>
+        <div class="h">Results</div>
+        <button class="ios6-btn" id="btnToggleDetails">Show details</button>
       </div>
 
-      <div id="decisionCard"></div>
+      <!-- TEXT-ONLY DECISION OUTPUT (ALWAYS VISIBLE) -->
+      <div class="card" id="decisionText"></div>
 
-      <div class="kpis" id="kpiGrid"></div>
+      <!-- DETAILS (HIDDEN BY DEFAULT) -->
+      <div id="detailsWrap" class="hidden" style="margin-top:12px;">
+        <div class="kpis" id="kpiGrid"></div>
 
-      <div class="spacer"></div>
+        <div class="spacer"></div>
 
-      <div id="timelineWrap">
-        <table>
-          <thead>
-            <tr>
-              <th style="width:140px;">Date</th>
-              <th>Event</th>
-              <th style="width:120px;" class="right">Inflow</th>
-              <th style="width:120px;" class="right">Outflow</th>
-              <th style="width:140px;" class="right">Balance</th>
-              <th style="width:110px;">Flag</th>
-            </tr>
-          </thead>
-          <tbody id="eventsTbody"></tbody>
-        </table>
+        <div id="timelineWrap">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:140px;">Date</th>
+                <th>Event</th>
+                <th style="width:120px;" class="right">Inflow</th>
+                <th style="width:120px;" class="right">Outflow</th>
+                <th style="width:140px;" class="right">Balance</th>
+                <th style="width:110px;">Flag</th>
+              </tr>
+            </thead>
+            <tbody id="eventsTbody"></tbody>
+          </table>
+        </div>
+
+        <div class="note" id="warnings"></div>
       </div>
-
-      <div class="note" id="warnings"></div>
     </section>
+
 
     <!-- SETTINGS -->
     <section class="card hidden ios6-card" id="tab-settings">
