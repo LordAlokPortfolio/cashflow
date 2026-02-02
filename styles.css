@@ -190,3 +190,9 @@ tr:last-child td{border-bottom:0}
 .ios6-quiz-q{font-size:16px;font-weight:990;margin-bottom:6px}
 .ios6-quiz-reason{font-size:12px;color:var(--muted);margin-bottom:12px}
 .ios6-quiz-nav{display:flex;justify-content:space-between;gap:10px;margin-top:12px}
+/* Phone overflow guard */
+*, *::before, *::after { box-sizing: border-box; }
+input, select, textarea { max-width: 100%; }
+.ios6-quiz-input { overflow: hidden; }
+table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* Scrollbar hide for WebKit */

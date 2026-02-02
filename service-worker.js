@@ -1,4 +1,4 @@
-const CACHE = "cashflow-pwa-v1";
+const CACHE = "cashflow-pwa-v2";
 const ASSETS = [
   "./",
   "./index.html",

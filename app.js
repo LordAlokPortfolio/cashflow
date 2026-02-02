@@ -1,17 +1,19 @@
 /* =========================================================
-   Cashflow Decision Maker — Quiz setup + decisive output
+   Cashflow Decision Maker — Quiz setup (dynamic debts) + decisive output
    Requirements implemented:
-   - Remove per-pay obligation questions (still exists in settings; not in quiz)
-   - LOC questions conditional (APR/balance/creditLimit asked only if LOC)
-   - LOC credit limit stored and used to recommend minimal borrowing
-   - Future expenses prompt: Yes -> go Future tab; No -> go Results
+   1) After entering 1 debt, ask: "Add another CC/LOC?" Yes/No (per person)
+   2) Ask Car loan/lease EMI per pay (optional) in quiz (per person)
+   3) Phone-safe quiz input sizing handled mostly by CSS; JS also guards
+   4) LOC questions are conditional (APR/Limit/Balance asked only if LOC)
+   5) Decision output recommends minimal LOC borrowing if UNSAFE
    ========================================================= */
 
-const LS = "cashflow_quiz_v3";
+const LS = "cashflow_quiz_v4";
 
 const qsa = (sel) => Array.from(document.querySelectorAll(sel));
 const el = (id) => document.getElementById(id);
 
+/* ---------- utils ---------- */
 function fmt(x){
   const v = Number(x || 0);
   return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -40,6 +42,7 @@ function nextPayFromLast(today, lastPay, everyDays){
   return cand;
 }
 
+/* ---------- storage ---------- */
 function load(){
   const raw = localStorage.getItem(LS);
   if (!raw) return null;
@@ -47,13 +50,14 @@ function load(){
 }
 function save(st){ localStorage.setItem(LS, JSON.stringify(st)); }
 
+/* ---------- default state ---------- */
 function defaultState(){
   const td = new Date(); td.setHours(0,0,0,0);
   const fallback = toISO(addDays(td, -14));
+
   return {
     theme: "dark",
     mode: "setup",
-    quizStep: 0,
     settings: { payEveryDays: 14, horizonDays: 90, rentDueDay: 28 },
     shared: { rentAmount: 0, cashBuffer: 0, note: "", wantsFuture: false },
     people: [
@@ -63,9 +67,10 @@ function defaultState(){
         lastPayDate: fallback,
         payAmount: 0,
         cash: 0,
+        perPayObligationLabel: "Car loan/lease (per pay)",
+        perPayObligationAmount: 0,
         debts: [
-          { id: crypto.randomUUID(), label: "Card 1", type: "cc", dueDay: 16, balance: 0, apr: 0, creditLimit: 0 },
-          { id: crypto.randomUUID(), label: "LOC", type: "loc", dueDay: 8, balance: 0, apr: 0, creditLimit: 0 }
+          { id: crypto.randomUUID(), label: "AMEX", type: "cc", dueDay: 16, balance: 0, apr: 0, creditLimit: 0 }
         ]
       },
       {
@@ -74,15 +79,53 @@ function defaultState(){
         lastPayDate: fallback,
         payAmount: 0,
         cash: 0,
+        perPayObligationLabel: "Car loan/lease (per pay)",
+        perPayObligationAmount: 0,
         debts: [
-          { id: crypto.randomUUID(), label: "Card 1", type: "cc", dueDay: 5, balance: 0, apr: 0, creditLimit: 0 }
+          { id: crypto.randomUUID(), label: "CIBC", type: "cc", dueDay: 5, balance: 0, apr: 0, creditLimit: 0 }
         ]
       }
     ],
-    future: []
+    future: [],
+    quiz: { cur: null, history: [] }
   };
 }
 
+/* ---------- migration ---------- */
+function migrate(st){
+  if (!st) return st;
+
+  if (!st.shared) st.shared = { rentAmount:0, cashBuffer:0, note:"", wantsFuture:false };
+  if (st.shared.wantsFuture == null) st.shared.wantsFuture = false;
+
+  if (!st.quiz) st.quiz = { cur: null, history: [] };
+  if (!Array.isArray(st.quiz.history)) st.quiz.history = [];
+
+  (st.people||[]).forEach(p=>{
+    if (!p.debts) p.debts = [];
+    if (p.perPayObligationLabel == null) p.perPayObligationLabel = "Car loan/lease (per pay)";
+    if (p.perPayObligationAmount == null) p.perPayObligationAmount = 0;
+
+    p.debts.forEach(d=>{
+      if (d.creditLimit == null) d.creditLimit = 0;
+      if (d.apr == null) d.apr = 0;
+      if (d.balance == null) d.balance = 0;
+      if (!d.type) d.type = "cc";
+      if (d.dueDay == null) d.dueDay = 0;
+      if (!d.label) d.label = "Card";
+    });
+
+    if (p.debts.length === 0){
+      p.debts.push({ id: crypto.randomUUID(), label:"Card 1", type:"cc", dueDay:0, balance:0, apr:0, creditLimit:0 });
+    }
+  });
+
+  return st;
+}
+
+/* =========================================================
+   UI helpers
+   ========================================================= */
 function showTab(tab){
   qsa(".seg button").forEach(b=>b.classList.toggle("active", b.dataset.tab===tab));
   ["setup","today","future","results","settings"].forEach(t=>{
@@ -91,7 +134,12 @@ function showTab(tab){
   });
 }
 
-/* ---------- Drawer + theme ---------- */
+function mountTabs(){
+  qsa(".seg button").forEach(btn=>{
+    btn.addEventListener("click", ()=> showTab(btn.dataset.tab));
+  });
+}
+
 function mountDrawer(){
   const open = ()=>{ el("drawer").classList.remove("hidden"); el("backdrop").classList.remove("hidden"); };
   const close = ()=>{ el("drawer").classList.add("hidden"); el("backdrop").classList.add("hidden"); };
@@ -99,9 +147,10 @@ function mountDrawer(){
   el("btnCloseDrawer").addEventListener("click", close);
   el("backdrop").addEventListener("click", close);
 }
+
 function mountTheme(){
   el("btnTheme").addEventListener("click", ()=>{
-    const st = load() || defaultState();
+    const st = migrate(load() || defaultState());
     const cur = document.documentElement.getAttribute("data-theme") || "dark";
     const next = (cur === "dark") ? "light" : "dark";
     document.documentElement.setAttribute("data-theme", next);
@@ -111,190 +160,7 @@ function mountTheme(){
 }
 
 /* =========================================================
-   QUIZ (33-ish, but conditional LOC steps skip automatically)
-   You requested:
-   - remove per-pay obligation questions
-   - conditional LOC steps
-   - add LOC credit limit
-   - future expenses yes/no at end
-   ========================================================= */
-
-function buildQuiz(st){
-  const steps = [
-    { key:"people.0.name", type:"text", q:"What is Person 1 name?", reason:"Labels reduce friction; math stays the same." },
-    { key:"people.1.name", type:"text", q:"What is Person 2 name?", reason:"Same system; 2nd income stream." },
-
-    { key:"settings.payEveryDays", type:"number", q:"Pay cycle in days?", reason:"Inflow rhythm.", min:1, preset:14 },
-    { key:"settings.horizonDays", type:"number", q:"Projection horizon in days?", reason:"How far ahead to check risk.", min:14, preset:90 },
-
-    { key:"shared.rentAmount", type:"money", q:"Rent amount?", reason:"Largest fixed constraint." },
-    { key:"settings.rentDueDay", type:"number", q:"Rent due day (1–31)?", reason:"Used to schedule next rent event.", min:1, max:31, preset:28 },
-
-    { key:"people.0.lastPayDate", type:"date", q:"Person 1 last pay date?", reason:"Derives next pay dates." },
-    { key:"people.0.payAmount", type:"money", q:"Person 1 pay amount (per pay)?", reason:"Primary inflow." },
-    { key:"people.0.cash", type:"money", q:"Person 1 cash on hand (optional)?", reason:"Starting cash improves accuracy.", optional:true, preset:0 },
-
-    // Person 1 Debt #1
-    { key:"people.0.debts.0.label", type:"text", q:"Person 1 Card #1 name?", reason:"Example: AMEX / Scotia / CIBC.", preset:"AMEX" },
-    { key:"people.0.debts.0.type", type:"select", q:"Person 1 Card #1 type?", reason:"CC = pay full; LOC = minimum interest.", options:["cc","loc"], preset:"cc" },
-    { key:"people.0.debts.0.dueDay", type:"number", q:"Person 1 Card #1 due day (1–31)?", reason:"Schedules next due event.", min:1, max:31, preset:16 },
-    { key:"people.0.debts.0.apr", type:"number", q:"APR% (only if LOC)", reason:"Needed only for LOC minimum.", preset:0,
-      showIf:(s)=> s.people[0].debts[0].type==="loc" },
-    { key:"people.0.debts.0.creditLimit", type:"money", q:"Credit limit (only if LOC)", reason:"Used to compute borrowing capacity.", preset:0,
-      showIf:(s)=> s.people[0].debts[0].type==="loc" },
-    { key:"people.0.debts.0.balance", type:"money", q:"Statement balance (CC) or balance (LOC)?", reason:"The amount due/owed.", preset:0 },
-
-    // Person 1 Debt #2
-    { key:"people.0.debts.1.label", type:"text", q:"Person 1 Debt #2 name?", reason:"Example: LOC.", preset:"LOC" },
-    { key:"people.0.debts.1.type", type:"select", q:"Person 1 Debt #2 type?", reason:"LOC enables bridging.", options:["cc","loc"], preset:"loc" },
-    { key:"people.0.debts.1.dueDay", type:"number", q:"Person 1 Debt #2 due day (1–31)?", reason:"Schedules next due event.", min:1, max:31, preset:8 },
-    { key:"people.0.debts.1.apr", type:"number", q:"APR% for LOC?", reason:"Required for LOC minimum payment.", preset:9,
-      showIf:(s)=> s.people[0].debts[1].type==="loc" },
-    { key:"people.0.debts.1.creditLimit", type:"money", q:"LOC credit limit?", reason:"Borrowing capacity = limit − balance.", preset:0,
-      showIf:(s)=> s.people[0].debts[1].type==="loc" },
-    { key:"people.0.debts.1.balance", type:"money", q:"LOC balance?", reason:"Used to compute minimum interest.", preset:0,
-      showIf:(s)=> s.people[0].debts[1].type==="loc" },
-
-    // Person 2
-    { key:"people.1.lastPayDate", type:"date", q:"Person 2 last pay date?", reason:"Second inflow stream." },
-    { key:"people.1.payAmount", type:"money", q:"Person 2 pay amount (per pay)?", reason:"Second inflow stream." },
-    { key:"people.1.cash", type:"money", q:"Person 2 cash on hand (optional)?", reason:"Starting cash improves accuracy.", optional:true, preset:0 },
-
-    // Person 2 Debt #1
-    { key:"people.1.debts.0.label", type:"text", q:"Person 2 Card #1 name?", reason:"Example: CIBC / Scotia.", preset:"CIBC" },
-    { key:"people.1.debts.0.type", type:"select", q:"Person 2 Card #1 type?", reason:"CC = pay full; LOC = minimum interest.", options:["cc","loc"], preset:"cc" },
-    { key:"people.1.debts.0.dueDay", type:"number", q:"Person 2 Card #1 due day (1–31)?", reason:"Schedules next due event.", min:1, max:31, preset:5 },
-    { key:"people.1.debts.0.apr", type:"number", q:"APR% (only if LOC)", reason:"Needed only for LOC minimum.", preset:0,
-      showIf:(s)=> s.people[1].debts[0].type==="loc" },
-    { key:"people.1.debts.0.creditLimit", type:"money", q:"Credit limit (only if LOC)", reason:"Borrowing capacity = limit − balance.", preset:0,
-      showIf:(s)=> s.people[1].debts[0].type==="loc" },
-    { key:"people.1.debts.0.balance", type:"money", q:"Statement balance (CC) or balance (LOC)?", reason:"The amount due/owed.", preset:0 },
-
-    { key:"shared.cashBuffer", type:"money", q:"House cash buffer (optional)?", reason:"If you want strict, keep 0.", optional:true, preset:0 },
-    { key:"shared.note", type:"text", q:"Optional note?", reason:"For your own context.", optional:true, preset:"" },
-
-    { key:"shared.wantsFuture", type:"select", q:"Do you have future expenses to add now?", reason:"Yes → Future page. No → Decision.", options:["no","yes"], preset:"no" }
-  ];
-
-  return steps;
-}
-
-function getByPath(obj, path){
-  return path.split(".").reduce((acc, k)=> (acc==null ? acc : acc[k]), obj);
-}
-function setByPath(obj, path, value){
-  const parts = path.split(".");
-  let cur = obj;
-  for (let i=0;i<parts.length-1;i++){
-    const k = parts[i];
-    if (cur[k] == null) cur[k] = {};
-    cur = cur[k];
-  }
-  cur[parts[parts.length-1]] = value;
-}
-
-function stepVisible(step, st){
-  return !step.showIf || step.showIf(st);
-}
-function findNextVisibleIndex(st, steps, start, dir){
-  let i = start;
-  while (i >= 0 && i < steps.length && !stepVisible(steps[i], st)) i += dir;
-  return i;
-}
-
-function renderQuiz(st){
-  const steps = buildQuiz(st);
-
-  // land on a visible step
-  let i = Math.max(0, Math.min(st.quizStep || 0, steps.length-1));
-  i = findNextVisibleIndex(st, steps, i, +1);
-  st.quizStep = i;
-  save(st);
-
-  const step = steps[i];
-
-  el("quizProgress").textContent = `Step ${i+1} of ${steps.length}`;
-  el("quizProgressFill").style.width = `${Math.round(((i+1)/steps.length)*100)}%`;
-  el("quizQuestion").textContent = step.q;
-  el("quizReason").textContent = step.reason || "";
-  el("quizNote").textContent = "";
-
-  const inputWrap = el("quizInput");
-  inputWrap.innerHTML = "";
-
-  let curVal = getByPath(st, step.key);
-  if (step.key === "shared.wantsFuture" && typeof curVal === "boolean") curVal = curVal ? "yes" : "no";
-  const preset = (curVal === "" || curVal == null) ? (step.preset ?? "") : curVal;
-
-  let inputEl;
-  if (step.type === "select"){
-    inputEl = document.createElement("select");
-    inputEl.innerHTML = step.options.map(o=>`<option value="${o}">${o.toUpperCase()}</option>`).join("");
-    inputEl.value = preset || step.options[0];
-  } else {
-    inputEl = document.createElement("input");
-    inputEl.type = (step.type === "date") ? "date" : (step.type === "text" ? "text" : "number");
-    if (step.type === "money") inputEl.step = "0.01";
-    if (step.type === "number") inputEl.step = "1";
-    if (step.min != null) inputEl.min = String(step.min);
-    if (step.max != null) inputEl.max = String(step.max);
-    inputEl.value = (preset ?? "");
-  }
-
-  // not too wide
-  inputEl.style.width = "100%";
-  inputEl.style.maxWidth = "420px";
-  inputEl.style.margin = "0 auto";
-  inputEl.style.display = "block";
-  inputEl.style.padding = "11px 12px";
-  inputEl.style.borderRadius = "14px";
-  inputEl.style.border = "1px solid var(--stroke)";
-  inputEl.style.background = "rgba(0,0,0,.12)";
-  inputEl.style.color = "var(--text)";
-
-  inputWrap.appendChild(inputEl);
-
-  el("quizBack").disabled = (i===0);
-  el("quizNext").textContent = (i===steps.length-1) ? "Finish" : "Next";
-}
-
-function commitQuizAnswer(st){
-  const steps = buildQuiz(st);
-  const step = steps[st.quizStep || 0];
-  const control = el("quizInput").querySelector("input, select");
-  if (!control) return true;
-
-  let val = control.value;
-
-  if (step.key === "shared.wantsFuture") val = (val === "yes");
-
-  if (step.type === "money" || step.type === "number") val = Number(val || 0);
-
-  if (!step.optional){
-    if (step.type === "text" && String(val).trim()===""){ el("quizNote").textContent = "Required."; return false; }
-    if (step.type === "date" && String(val).trim()===""){ el("quizNote").textContent = "Pick a date."; return false; }
-  }
-
-  setByPath(st, step.key, val);
-  save(st);
-  return true;
-}
-
-function finishQuiz(st){
-  st.mode = "run";
-  st.quizStep = 0;
-  save(st);
-
-  // render screens using final state
-  boot();
-
-  // route
-  if (st.shared.wantsFuture) showTab("future");
-  else showTab("results");
-}
-
-/* =========================================================
-   Today/Future/Settings render (simplified)
+   TODAY / FUTURE / SETTINGS render (kept simple)
    ========================================================= */
 function renderToday(st){
   const root = el("peopleToday");
@@ -323,6 +189,7 @@ function renderToday(st){
           <input data-p="${p.id}" data-k="cash" type="number" step="0.01" value="${p.cash || 0}">
         </div>
       </div>
+
       <div class="divider"></div>
       <div class="muted small" style="margin-bottom:8px;">Debts (balances)</div>
       <div class="grid" data-debts="${p.id}"></div>
@@ -362,7 +229,7 @@ function renderFuture(st){
   });
   tbody.querySelectorAll("button[data-del]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
-      const st2 = load() || defaultState();
+      const st2 = migrate(load() || defaultState());
       st2.future.splice(Number(btn.dataset.del), 1);
       save(st2);
       boot();
@@ -393,6 +260,14 @@ function renderSettings(st){
         <div class="field">
           <label>Name</label>
           <input data-p="${p.id}" data-k="name" type="text" value="${p.name}">
+        </div>
+        <div class="field">
+          <label>Car loan/lease (per pay)</label>
+          <input data-p="${p.id}" data-k="perPayObligationAmount" type="number" step="0.01" value="${p.perPayObligationAmount || 0}">
+        </div>
+        <div class="field">
+          <label>Car loan/lease label</label>
+          <input data-p="${p.id}" data-k="perPayObligationLabel" type="text" value="${p.perPayObligationLabel || "Car loan/lease (per pay)"}">
         </div>
       </div>
 
@@ -439,9 +314,12 @@ function renderSettings(st){
     card.querySelectorAll("button[data-deldebt]").forEach(b=>{
       b.addEventListener("click", ()=>{
         const [pid, did] = b.dataset.deldebt.split(":");
-        const st2 = load() || defaultState();
+        const st2 = migrate(load() || defaultState());
         const p2 = st2.people.find(x=>x.id===pid);
         p2.debts = p2.debts.filter(x=>x.id!==did);
+        if (p2.debts.length === 0){
+          p2.debts.push({ id: crypto.randomUUID(), label:"Card 1", type:"cc", dueDay:0, balance:0, apr:0, creditLimit:0 });
+        }
         save(st2);
         boot();
         showTab("settings");
@@ -449,7 +327,7 @@ function renderSettings(st){
     });
 
     card.querySelector("button[data-adddebt]").addEventListener("click", ()=>{
-      const st2 = load() || defaultState();
+      const st2 = migrate(load() || defaultState());
       const p2 = st2.people.find(x=>x.id===p.id);
       p2.debts.push({ id: crypto.randomUUID(), label:"New debt", type:"cc", dueDay:0, balance:0, apr:0, creditLimit:0 });
       save(st2);
@@ -458,7 +336,7 @@ function renderSettings(st){
     });
 
     card.querySelector("button[data-delperson]").addEventListener("click", ()=>{
-      const st2 = load() || defaultState();
+      const st2 = migrate(load() || defaultState());
       st2.people = st2.people.filter(x=>x.id!==p.id);
       save(st2);
       boot();
@@ -467,13 +345,15 @@ function renderSettings(st){
   });
 
   el("btnAddPerson").onclick = ()=>{
-    const st2 = load() || defaultState();
+    const st2 = migrate(load() || defaultState());
     st2.people.push({
       id: crypto.randomUUID(),
       name: `Person ${st2.people.length+1}`,
       lastPayDate: toISO(addDays(new Date(), -14)),
       payAmount: 0,
       cash: 0,
+      perPayObligationLabel: "Car loan/lease (per pay)",
+      perPayObligationAmount: 0,
       debts: [{ id: crypto.randomUUID(), label:"Card 1", type:"cc", dueDay:0, balance:0, apr:0, creditLimit:0 }]
     });
     save(st2);
@@ -482,11 +362,13 @@ function renderSettings(st){
   };
 }
 
-/* ---------- input save ---------- */
+/* =========================================================
+   Save-on-input bindings
+   ========================================================= */
 function attachInputHandlers(){
   document.body.addEventListener("input", (e)=>{
     const t = e.target;
-    const st = load() || defaultState();
+    const st = migrate(load() || defaultState());
 
     if (t.id === "rentAmount") st.shared.rentAmount = Number(t.value||0);
     if (t.id === "cashBuffer") st.shared.cashBuffer = Number(t.value||0);
@@ -516,6 +398,8 @@ function attachInputHandlers(){
         if (k === "lastPayDate") p.lastPayDate = t.value || "";
         if (k === "payAmount") p.payAmount = Number(t.value||0);
         if (k === "cash") p.cash = Number(t.value||0);
+        if (k === "perPayObligationLabel") p.perPayObligationLabel = t.value || "";
+        if (k === "perPayObligationAmount") p.perPayObligationAmount = Number(t.value||0);
       }
     }
 
@@ -524,7 +408,7 @@ function attachInputHandlers(){
 }
 
 /* =========================================================
-   Compute + Decision maker (bridge recommendation)
+   Decision engine (Feynman)
    ========================================================= */
 function estInterest(amount, aprPct, days){
   if (amount <= 0 || !aprPct || aprPct <= 0 || days <= 0) return 0;
@@ -534,7 +418,6 @@ function estInterest(amount, aprPct, days){
 function locCapacity(st){
   let totalAvail = 0;
   const locs = [];
-
   st.people.forEach(p=>{
     (p.debts||[]).forEach(d=>{
       if (d.type !== "loc") return;
@@ -546,7 +429,6 @@ function locCapacity(st){
       locs.push({ owner:p.name, label:d.label, avail, apr });
     });
   });
-
   locs.sort((a,b)=> (a.apr||999)-(b.apr||999));
   return { totalAvail, best: locs[0] || null };
 }
@@ -562,29 +444,36 @@ function compute(st){
   let cashStart = Number(st.shared.cashBuffer||0);
   st.people.forEach(p=> cashStart += Number(p.cash||0));
 
-  // pay streams
+  // pay streams + car EMI (per pay)
   st.people.forEach(p=>{
     const lp = parseISO(p.lastPayDate);
     if (!lp) { warnings.push(`${p.name}: missing last pay date`); return; }
     let pay = nextPayFromLast(today, lp, every);
     while (pay <= addDays(today, horizon)){
       events.push({ date: toISO(pay), name: `${p.name} pay`, inflow: Number(p.payAmount||0), outflow: 0 });
+
+      const emi = Number(p.perPayObligationAmount||0);
+      if (emi > 0){
+        events.push({ date: toISO(pay), name: `${p.name}: ${p.perPayObligationLabel || "Car loan/lease"} `, inflow: 0, outflow: emi });
+      }
+
       pay = addDays(pay, every);
     }
   });
 
-  // rent once
+  // rent (next occurrence)
   const rentDue = nextDueByDay(today, st.settings.rentDueDay);
   if (rentDue && (st.shared.rentAmount||0) > 0){
     events.push({ date: toISO(rentDue), name: `Rent`, inflow: 0, outflow: Number(st.shared.rentAmount||0) });
   }
 
-  // debts once: CC full; LOC minimum interest-only
+  // debts (next occurrence)
   st.people.forEach(p=>{
     (p.debts||[]).forEach(d=>{
       if (!d.dueDay || d.dueDay < 1) return;
       const due = nextDueByDay(today, d.dueDay);
       if (!due) return;
+
       const bal = Number(d.balance||0);
       if (bal <= 0) return;
 
@@ -599,7 +488,7 @@ function compute(st){
     });
   });
 
-  // future expenses
+  // future
   (st.future||[]).forEach(x=>{
     if (x?.date && Number(x.amount||0) !== 0){
       events.push({ date: x.date, name: `Future: ${x.label||"Expense"}`, inflow: 0, outflow: Number(x.amount||0) });
@@ -718,65 +607,311 @@ function renderResults(st, model){
     : "";
 }
 
-/* ---------- Export/Import ---------- */
-function exportJSON(){
-  const st = load() || defaultState();
-  const blob = new Blob([JSON.stringify(st,null,2)], {type:"application/json"});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "cashflow-backup.json";
-  a.click();
-  URL.revokeObjectURL(url);
-}
-async function importJSON(file){
-  const txt = await file.text();
-  const st = JSON.parse(txt);
-  // migrate missing fields
-  st.shared = st.shared || { rentAmount:0,cashBuffer:0,note:"",wantsFuture:false };
-  if (st.shared.wantsFuture == null) st.shared.wantsFuture = false;
-  (st.people||[]).forEach(p=>{
-    (p.debts||[]).forEach(d=>{
-      if (d.creditLimit == null) d.creditLimit = 0;
-    });
-  });
+/* =========================================================
+   QUIZ state-machine (dynamic debts)
+   cur = { stage, pi, di, field }
+   history stack enables Back
+   ========================================================= */
+function setCur(st, cur){
+  st.quiz.cur = cur;
   save(st);
-  boot();
 }
 
-/* ---------- Buttons + wiring ---------- */
+function pushHistory(st){
+  st.quiz.history.push(JSON.parse(JSON.stringify(st.quiz.cur)));
+  save(st);
+}
+function popHistory(st){
+  const prev = st.quiz.history.pop();
+  save(st);
+  return prev || null;
+}
+
+function startQuiz(st){
+  st.mode = "setup";
+  st.quiz.cur = { stage:"names", pi:0, di:0, field:"p1name" };
+  st.quiz.history = [];
+  save(st);
+}
+
+function stepDescriptor(st){
+  const p1 = st.people[0];
+  const p2 = st.people[1];
+
+  const cur = st.quiz.cur;
+  if (!cur) return null;
+
+  // Global stages
+  if (cur.stage === "names"){
+    if (cur.field === "p1name") return { q:"What is Person 1 name?", reason:"Names reduce friction; math stays the same.", type:"text",
+      get:()=>p1.name, set:(v)=>{p1.name=v;} };
+    if (cur.field === "p2name") return { q:"What is Person 2 name?", reason:"Second income stream.", type:"text",
+      get:()=>p2.name, set:(v)=>{p2.name=v;} };
+  }
+
+  if (cur.stage === "settings"){
+    if (cur.field === "payEveryDays") return { q:"Pay cycle in days?", reason:"Inflow rhythm.", type:"number", min:1, max:365,
+      get:()=>st.settings.payEveryDays, set:(v)=>{st.settings.payEveryDays=v;} };
+    if (cur.field === "horizonDays") return { q:"Projection horizon in days?", reason:"How far ahead to check risk.", type:"number", min:14, max:365,
+      get:()=>st.settings.horizonDays, set:(v)=>{st.settings.horizonDays=v;} };
+    if (cur.field === "rentAmount") return { q:"Rent amount?", reason:"Largest fixed constraint.", type:"money",
+      get:()=>st.shared.rentAmount, set:(v)=>{st.shared.rentAmount=v;} };
+    if (cur.field === "rentDueDay") return { q:"Rent due day (1–31)?", reason:"Schedules next rent event.", type:"number", min:1, max:31,
+      get:()=>st.settings.rentDueDay, set:(v)=>{st.settings.rentDueDay=v;} };
+  }
+
+  if (cur.stage === "person"){
+    const p = st.people[cur.pi];
+    const who = p.name || `Person ${cur.pi+1}`;
+
+    if (cur.field === "lastPayDate") return { q:`${who}: last pay date?`, reason:"Derives next pay dates.", type:"date",
+      get:()=>p.lastPayDate, set:(v)=>{p.lastPayDate=v;} };
+
+    if (cur.field === "payAmount") return { q:`${who}: pay amount (per pay)?`, reason:"Income used to cover bills.", type:"money",
+      get:()=>p.payAmount, set:(v)=>{p.payAmount=v;} };
+
+    if (cur.field === "cash") return { q:`${who}: cash on hand (optional)?`, reason:"Starting cash improves accuracy.", type:"money", optional:true,
+      get:()=>p.cash, set:(v)=>{p.cash=v;} };
+
+    if (cur.field === "emi") return { q:`${who}: car loan/lease per pay (optional)?`, reason:"This can nullify part of each pay.", type:"money", optional:true,
+      get:()=>p.perPayObligationAmount, set:(v)=>{p.perPayObligationAmount=v; p.perPayObligationLabel="Car loan/lease (per pay)";} };
+  }
+
+  if (cur.stage === "debt"){
+    const p = st.people[cur.pi];
+    const who = p.name || `Person ${cur.pi+1}`;
+    const d = p.debts[cur.di];
+
+    if (!d) return null;
+
+    if (cur.field === "label") return { q:`${who}: CC/LOC #${cur.di+1} name?`, reason:"Example: AMEX, Scotia, CIBC, LOC.", type:"text",
+      get:()=>d.label, set:(v)=>{d.label=v;} };
+
+    if (cur.field === "type") return { q:`${who}: ${d.label || "Debt"} type?`, reason:"CC = pay full; LOC = minimum + borrowing option.", type:"select", options:["cc","loc"],
+      get:()=>d.type, set:(v)=>{d.type=v;} };
+
+    if (cur.field === "dueDay") return { q:`${who}: ${d.label || "Debt"} due day (1–31)?`, reason:"Schedules next due event.", type:"number", min:1, max:31,
+      get:()=>d.dueDay, set:(v)=>{d.dueDay=v;} };
+
+    if (cur.field === "apr") {
+      if (d.type !== "loc") return { skip:true };
+      return { q:`${who}: ${d.label || "LOC"} APR % ?`, reason:"Needed to estimate minimum and interest cost.", type:"number", min:0, max:200,
+        get:()=>d.apr, set:(v)=>{d.apr=v;} };
+    }
+
+    if (cur.field === "creditLimit") {
+      if (d.type !== "loc") return { skip:true };
+      return { q:`${who}: ${d.label || "LOC"} credit limit?`, reason:"Borrowing capacity = limit − balance.", type:"money",
+        get:()=>d.creditLimit, set:(v)=>{d.creditLimit=v;} };
+    }
+
+    if (cur.field === "balance") return {
+      q:`${who}: ${d.label || "Debt"} balance / statement amount?`,
+      reason: d.type === "cc" ? "CC must be paid in full by due day." : "LOC balance used to compute minimum interest-only.",
+      type:"money",
+      get:()=>d.balance,
+      set:(v)=>{d.balance=v;}
+    };
+
+    if (cur.field === "addMore") return {
+      q:`${who}: add another CC/LOC?`,
+      reason:"Add only what you actually use.",
+      type:"select",
+      options:["no","yes"],
+      get:()=> "no",
+      set:(v)=>{ /* handled in advance() */ }
+    };
+  }
+
+  if (cur.stage === "finish"){
+    if (cur.field === "cashBuffer") return { q:"House cash buffer (optional)?", reason:"Strict decision-making: keep 0.", type:"money", optional:true,
+      get:()=>st.shared.cashBuffer, set:(v)=>{st.shared.cashBuffer=v;} };
+    if (cur.field === "note") return { q:"Optional note?", reason:"Context only.", type:"text", optional:true,
+      get:()=>st.shared.note, set:(v)=>{st.shared.note=v;} };
+    if (cur.field === "wantsFuture") return { q:"Do you have future expenses to add now?", reason:"Yes → Future page. No → Decision.", type:"select", options:["no","yes"],
+      get:()=> (st.shared.wantsFuture ? "yes" : "no"), set:(v)=>{st.shared.wantsFuture=(v==="yes");} };
+  }
+
+  return null;
+}
+
+function renderQuiz(st){
+  const desc = stepDescriptor(st);
+  if (!desc) return;
+
+  // auto-skip conditional loc-only fields
+  if (desc.skip){
+    advance(st, true);
+    return;
+  }
+
+  // progress (approx; not exact step count; still useful)
+  el("quizProgress").textContent = `STEP`;
+  el("quizProgressFill").style.width = "0%";
+
+  el("quizQuestion").textContent = desc.q || "";
+  el("quizReason").textContent = desc.reason || "";
+  el("quizNote").textContent = "";
+
+  const wrap = el("quizInput");
+  wrap.innerHTML = "";
+
+  let input;
+  if (desc.type === "select"){
+    input = document.createElement("select");
+    input.innerHTML = (desc.options||[]).map(o=>`<option value="${o}">${o.toUpperCase()}</option>`).join("");
+    input.value = desc.get() ?? (desc.options?.[0] || "");
+  } else {
+    input = document.createElement("input");
+    input.type = (desc.type==="date") ? "date" : (desc.type==="text" ? "text" : "number");
+    if (desc.type==="money") input.step = "0.01";
+    if (desc.type==="number") input.step = "1";
+    if (desc.min != null) input.min = String(desc.min);
+    if (desc.max != null) input.max = String(desc.max);
+    input.value = desc.get() ?? "";
+  }
+
+  // prevent spill on phone
+  input.style.width = "100%";
+  input.style.maxWidth = "420px";
+  input.style.display = "block";
+  input.style.margin = "0 auto";
+
+  wrap.appendChild(input);
+
+  el("quizBack").disabled = (st.quiz.history.length === 0);
+  el("quizNext").textContent = "Next";
+}
+
+function commitQuiz(st){
+  const desc = stepDescriptor(st);
+  if (!desc || desc.skip) return true;
+
+  const control = el("quizInput").querySelector("input, select");
+  if (!control) return true;
+
+  let v = control.value;
+
+  if (desc.type === "money" || desc.type === "number"){
+    v = Number(v || 0);
+  }
+
+  if (!desc.optional){
+    if (desc.type==="text" && String(v).trim()===""){ el("quizNote").textContent = "Required."; return false; }
+    if (desc.type==="date" && String(v).trim()===""){ el("quizNote").textContent = "Pick a date."; return false; }
+  }
+
+  desc.set(v);
+  save(st);
+  return true;
+}
+
+function advance(st, autoSkip=false){
+  const cur = st.quiz.cur;
+
+  // if skipping, do not push history
+  if (!autoSkip) pushHistory(st);
+
+  // stage transitions
+  if (cur.stage === "names"){
+    if (cur.field === "p1name"){ cur.field = "p2name"; setCur(st, cur); return; }
+    if (cur.field === "p2name"){ setCur(st, { stage:"settings", pi:0, di:0, field:"payEveryDays" }); return; }
+  }
+
+  if (cur.stage === "settings"){
+    if (cur.field === "payEveryDays"){ cur.field="horizonDays"; setCur(st, cur); return; }
+    if (cur.field === "horizonDays"){ cur.field="rentAmount"; setCur(st, cur); return; }
+    if (cur.field === "rentAmount"){ cur.field="rentDueDay"; setCur(st, cur); return; }
+    if (cur.field === "rentDueDay"){ setCur(st, { stage:"person", pi:0, di:0, field:"lastPayDate" }); return; }
+  }
+
+  if (cur.stage === "person"){
+    if (cur.field === "lastPayDate"){ cur.field="payAmount"; setCur(st, cur); return; }
+    if (cur.field === "payAmount"){ cur.field="cash"; setCur(st, cur); return; }
+    if (cur.field === "cash"){ cur.field="emi"; setCur(st, cur); return; }
+    if (cur.field === "emi"){
+      // go to debts for this person
+      setCur(st, { stage:"debt", pi:cur.pi, di:0, field:"label" });
+      return;
+    }
+  }
+
+  if (cur.stage === "debt"){
+    const p = st.people[cur.pi];
+    const d = p.debts[cur.di];
+
+    if (cur.field === "label"){ cur.field="type"; setCur(st, cur); return; }
+    if (cur.field === "type"){ cur.field="dueDay"; setCur(st, cur); return; }
+    if (cur.field === "dueDay"){ cur.field="apr"; setCur(st, cur); return; }
+    if (cur.field === "apr"){ cur.field="creditLimit"; setCur(st, cur); return; }
+    if (cur.field === "creditLimit"){ cur.field="balance"; setCur(st, cur); return; }
+    if (cur.field === "balance"){ cur.field="addMore"; setCur(st, cur); return; }
+
+    if (cur.field === "addMore"){
+      const control = el("quizInput").querySelector("select");
+      const ans = control ? control.value : "no";
+
+      if (ans === "yes"){
+        // add another debt and loop
+        p.debts.push({ id: crypto.randomUUID(), label:"New debt", type:"cc", dueDay:0, balance:0, apr:0, creditLimit:0 });
+        save(st);
+        setCur(st, { stage:"debt", pi:cur.pi, di:p.debts.length-1, field:"label" });
+        return;
+      }
+
+      // move to next person or finish
+      if (cur.pi === 0){
+        setCur(st, { stage:"person", pi:1, di:0, field:"lastPayDate" });
+        return;
+      } else {
+        setCur(st, { stage:"finish", pi:0, di:0, field:"cashBuffer" });
+        return;
+      }
+    }
+  }
+
+  if (cur.stage === "finish"){
+    if (cur.field === "cashBuffer"){ cur.field="note"; setCur(st, cur); return; }
+    if (cur.field === "note"){ cur.field="wantsFuture"; setCur(st, cur); return; }
+    if (cur.field === "wantsFuture"){
+      // Finish → run mode
+      st.mode = "run";
+      save(st);
+      boot();
+      if (st.shared.wantsFuture) showTab("future");
+      else showTab("results");
+      return;
+    }
+  }
+}
+
+function goBack(st){
+  const prev = popHistory(st);
+  if (!prev) return;
+  setCur(st, prev);
+}
+
+/* =========================================================
+   Buttons
+   ========================================================= */
 function wireButtons(){
-  // Quiz
+  // Quiz buttons
   el("quizBack").onclick = ()=>{
-    const st = load() || defaultState();
-    const steps = buildQuiz(st);
-    let i = (st.quizStep||0) - 1;
-    i = findNextVisibleIndex(st, steps, i, -1);
-    st.quizStep = Math.max(0, i);
-    save(st);
+    const st = migrate(load() || defaultState());
+    goBack(st);
     renderQuiz(st);
   };
 
   el("quizNext").onclick = ()=>{
-    const st = load() || defaultState();
-    if (!commitQuizAnswer(st)) return;
-
-    const steps = buildQuiz(st);
-    let i = (st.quizStep||0) + 1;
-    i = findNextVisibleIndex(st, steps, i, +1);
-
-    if (i >= steps.length){
-      finishQuiz(st);
-      return;
-    }
-    st.quizStep = i;
-    save(st);
+    const st = migrate(load() || defaultState());
+    if (!commitQuiz(st)) return;
+    advance(st, false);
     renderQuiz(st);
   };
 
-  // Today compute
+  // Compute
   el("btnCompute").onclick = ()=>{
-    const st = load() || defaultState();
+    const st = migrate(load() || defaultState());
     st.shared.rentAmount = Number(el("rentAmount").value||0);
     st.shared.cashBuffer = Number(el("cashBuffer").value||0);
     st.shared.note = el("note").value || "";
@@ -787,9 +922,9 @@ function wireButtons(){
     showTab("results");
   };
 
-  // Future add
+  // Add future
   el("btnAddFuture").onclick = ()=>{
-    const st = load() || defaultState();
+    const st = migrate(load() || defaultState());
     const d = el("fDate").value;
     const a = Number(el("fAmount").value||0);
     const l = el("fLabel").value || "";
@@ -797,20 +932,35 @@ function wireButtons(){
     st.future.push({ date:d, amount:a, label:l });
     save(st);
     el("fDate").value=""; el("fAmount").value=""; el("fLabel").value="";
-    boot(); showTab("future");
+    boot();
+    showTab("future");
   };
 
-  // toggle timeline
+  // Toggle timeline
   el("btnToggleTable").onclick = ()=> el("timelineWrap").classList.toggle("hidden");
 
-  // export/import/reset
-  el("btnExport").onclick = exportJSON;
+  // Export/Import/Reset
+  el("btnExport").onclick = ()=>{
+    const st = migrate(load() || defaultState());
+    const blob = new Blob([JSON.stringify(st,null,2)], {type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "cashflow-backup.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   el("importFile").addEventListener("change", async (e)=>{
     const f = e.target.files?.[0];
     if (!f) return;
-    await importJSON(f);
+    const txt = await f.text();
+    const st = migrate(JSON.parse(txt));
+    save(st);
+    boot();
     e.target.value = "";
   });
+
   el("btnResetAll").onclick = ()=>{
     if (!confirm("Delete local data on this device?")) return;
     localStorage.removeItem(LS);
@@ -818,89 +968,53 @@ function wireButtons(){
   };
 }
 
-/* ---------- Tab buttons (safe) ---------- */
-function mountTabs(){
-  qsa(".seg button").forEach(btn=>{
-    btn.addEventListener("click", ()=>{
-      showTab(btn.dataset.tab);
-    });
-  });
-}
-
-/* ---------- Save on input ---------- */
-function attachInputHandlers(){
-  document.body.addEventListener("input", (e)=>{
-    const t = e.target;
-    const st = load() || defaultState();
-
-    if (t.id === "rentAmount") st.shared.rentAmount = Number(t.value||0);
-    if (t.id === "cashBuffer") st.shared.cashBuffer = Number(t.value||0);
-    if (t.id === "note") st.shared.note = t.value || "";
-
-    if (t.id === "payEveryDays") st.settings.payEveryDays = Number(t.value||14);
-    if (t.id === "horizonDays") st.settings.horizonDays = Number(t.value||90);
-    if (t.id === "rentDueDay") st.settings.rentDueDay = Number(t.value||28);
-
-    const pid = t.dataset.p;
-    if (pid){
-      const p = st.people.find(x=>x.id===pid);
-      if (!p) return;
-      const k = t.dataset.k;
-
-      if (t.dataset.debt){
-        const d = p.debts.find(x=>x.id===t.dataset.debt);
-        if (!d) return;
-        if (k === "balance") d.balance = Number(t.value||0);
-      } else {
-        if (k === "lastPayDate") p.lastPayDate = t.value || "";
-        if (k === "payAmount") p.payAmount = Number(t.value||0);
-        if (k === "cash") p.cash = Number(t.value||0);
-      }
-    }
-
-    save(st);
-  });
-}
-
-/* ---------- Boot ---------- */
+/* =========================================================
+   Boot
+   ========================================================= */
 function boot(){
-  let st = load();
-  if (!st) st = defaultState();
+  let st = migrate(load() || defaultState());
+  save(st);
 
-  // theme
   document.documentElement.setAttribute("data-theme", st.theme || "dark");
 
-  // render
   renderToday(st);
   renderFuture(st);
   renderSettings(st);
 
-  // compute
   const model = compute(st);
   renderResults(st, model);
 
-  // mode routing
   if (st.mode === "setup"){
-    // lock other tabs
     el("tabBtnToday").disabled = true;
     el("tabBtnFuture").disabled = true;
     el("tabBtnResults").disabled = true;
     el("tabBtnSettings").disabled = true;
+
     showTab("setup");
+
+    // initialize quiz cursor if missing
+    if (!st.quiz.cur){
+      startQuiz(st);
+    } else {
+      save(st);
+    }
     renderQuiz(st);
+
   } else {
     el("tabBtnToday").disabled = false;
     el("tabBtnFuture").disabled = false;
     el("tabBtnResults").disabled = false;
     el("tabBtnSettings").disabled = false;
+
     showTab("results");
   }
 
-  // SW
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("./service-worker.js");
 }
 
-/* ---------- init ---------- */
+/* =========================================================
+   Init
+   ========================================================= */
 (function init(){
   mountTabs();
   mountDrawer();
@@ -908,7 +1022,15 @@ function boot(){
   attachInputHandlers();
   wireButtons();
 
-  const st = load() || defaultState();
+  let st = migrate(load() || defaultState());
+
+  // Force setup after codebase change (prevents blank quiz)
+  if (st.mode !== "setup" && st.mode !== "run") st.mode = "setup";
+  if (!st.quiz || !st.quiz.cur) {
+    st.mode = "setup";
+    st.quiz = { cur: null, history: [] };
+  }
   save(st);
+
   boot();
 })();
