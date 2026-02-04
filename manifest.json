@@ -1,6 +1,6 @@
 {
   "name": "Next Bill",
-  "short_name": "One decision. One bill.",
+  "short_name": "Next Bill",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#0b1220",

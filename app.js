@@ -1,19 +1,19 @@
 /* =========================================================
-   Next Bill — Quiz setup + Text-only Decision Results
-   Fixes:
-   - Setup no longer "stuck" at future question (quiz state cleared on finish)
-   - If wantsFuture = YES but no items, Results says "mode ON but none added yet"
-   - If future items exist, Results mentions count + next future item
-   - Results is text-only; details hidden behind toggle
+   Next Bill — Anchor-first + CSV Mapping + Local Profile
+   - Quick Check: anchor cards (Rent, each CC/LOC due)
+   - Statements: CSV upload + mapping wizard + normalize into IndexedDB
+   - Insights: coverage/accuracy meter (honest gating)
+   - Profile: export/import + reset device data
    ========================================================= */
 
-const LS = "nextbill_v1";
+const LS_PROFILE = "nextbill_profile_v2";
 
+/* ---------- DOM helpers ---------- */
 const qsa = (sel) => Array.from(document.querySelectorAll(sel));
 const el = (id) => document.getElementById(id);
 
-/* ---------- utils ---------- */
-function fmt(x){
+/* ---------- formatting ---------- */
+function fmtMoney(x){
   const v = Number(x || 0);
   return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -24,6 +24,7 @@ function toISO(d){
 }
 function addDays(d, n){ const r = new Date(d); r.setDate(r.getDate() + n); return r; }
 function dim(y,m){ return new Date(y, m+1, 0).getDate(); }
+function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
 
 function nextDueByDay(today, dueDay){
   if (!dueDay || dueDay < 1) return null;
@@ -33,105 +34,174 @@ function nextDueByDay(today, dueDay){
   const nm = new Date(y, m+1, 1);
   return new Date(nm.getFullYear(), nm.getMonth(), Math.min(dueDay, dim(nm.getFullYear(), nm.getMonth())));
 }
-function nextPayFromLast(today, lastPay, everyDays){
-  const diff = Math.floor((today - lastPay) / (24*3600*1000));
-  const k = Math.max(0, Math.ceil(diff / everyDays));
-  let cand = addDays(lastPay, k*everyDays);
-  if (cand <= today) cand = addDays(cand, everyDays);
-  return cand;
+function addMonths(d, k){
+  const y = d.getFullYear(), m = d.getMonth();
+  const day = d.getDate();
+  const target = new Date(y, m + k, 1);
+  return new Date(target.getFullYear(), target.getMonth(), Math.min(day, dim(target.getFullYear(), target.getMonth())));
 }
 
-/* ---------- storage ---------- */
-function load(){
-  const raw = localStorage.getItem(LS);
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
-}
-function save(st){ localStorage.setItem(LS, JSON.stringify(st)); }
+/* =========================================================
+   IndexedDB (statements)
+   ========================================================= */
+const DB_NAME = "nextbill_db_v1";
+const DB_VER = 1;
 
-/* ---------- default state ---------- */
-function defaultState(){
-  const td = new Date(); td.setHours(0,0,0,0);
-  const fallback = toISO(addDays(td, -14));
-  return {
-    theme: "dark",
-    mode: "setup",
-    settings: { payEveryDays: 14, horizonDays: 90, rentDueDay: 28 },
-    shared: { rentAmount: 0, cashBuffer: 0, note: "", wantsFuture: false },
-    people: [
-      {
-        id: crypto.randomUUID(),
-        name: "Person 1",
-        lastPayDate: fallback,
-        payAmount: 0,
-        cash: 0,
-        perPayObligationLabel: "Car loan/lease (per pay)",
-        perPayObligationAmount: 0,
-        debts: [{ id: crypto.randomUUID(), label:"Card 1", type:"cc", dueDay:16, balance:0, apr:0, creditLimit:0 }]
-      },
-      {
-        id: crypto.randomUUID(),
-        name: "Person 2",
-        lastPayDate: fallback,
-        payAmount: 0,
-        cash: 0,
-        perPayObligationLabel: "Car loan/lease (per pay)",
-        perPayObligationAmount: 0,
-        debts: [{ id: crypto.randomUUID(), label:"Card 1", type:"cc", dueDay:5, balance:0, apr:0, creditLimit:0 }]
+function idbOpen(){
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VER);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains("tx")){
+        const os = db.createObjectStore("tx", { keyPath: "id" });
+        os.createIndex("byDate", "date");
       }
+      if (!db.objectStoreNames.contains("meta")){
+        db.createObjectStore("meta", { keyPath: "k" });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbPut(store, val){
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, "readwrite");
+    tx.objectStore(store).put(val);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function idbGet(store, key){
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, "readonly");
+    const req = tx.objectStore(store).get(key);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbClear(store){
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, "readwrite");
+    tx.objectStore(store).clear();
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function idbCount(store){
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, "readonly");
+    const req = tx.objectStore(store).count();
+    req.onsuccess = () => resolve(req.result || 0);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbGetCoverage(){
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("tx", "readonly");
+    const os = tx.objectStore("tx");
+    const idx = os.index("byDate");
+
+    let first = null, last = null;
+
+    // first
+    const req1 = idx.openCursor();
+    req1.onsuccess = () => {
+      const cur = req1.result;
+      if (cur){
+        first = cur.value.date;
+        cur.continue(); // keep going to find last
+      } else {
+        resolve({ start:first, end:last });
+      }
+    };
+    req1.onerror = () => reject(req1.error);
+
+    // last: we can’t reverse easily without IDBKeyRange; so we compute last in req1 loop:
+    idx.openCursor().onsuccess = (e) => {
+      const cur = e.target.result;
+      if (cur){
+        last = cur.value.date;
+        cur.continue();
+      }
+    };
+  });
+}
+
+/* =========================================================
+   Profile (local)
+   ========================================================= */
+function defaultProfile(){
+  return {
+    v: 2,
+    createdAt: new Date().toISOString(),
+    quick: {
+      defaultHorizonDays: 90,
+      defaultBufferFloor: 0,
+      sameDayOrder: "expensesFirst" // or incomeFirst
+    },
+    rent: { amount: 0, dueDay: 28 },
+    income: [
+      // { id, label, lastPayDate, everyDays, amount }
     ],
-    future: [],
-    quiz: { cur: null, history: [] }
+    debts: [
+      // { id, label, type:"cc"|"loc", dueDay, balance, apr, creditLimit }
+    ],
+    planned: [
+      // { id, date, amount, label }
+    ],
+    csvMapping: null, // { headers, delimiter, dateCol, descCol, mode, amountCol, debitCol, creditCol, typeCol, debitTokens[], accountCol }
+    coverage: { start:null, end:null, days:0, count:0, lastImportAt:null }
   };
 }
 
-/* ---------- migrate older states ---------- */
-function migrate(st){
-  if (!st) return st;
-  if (!st.settings) st.settings = { payEveryDays:14, horizonDays:90, rentDueDay:28 };
-  if (!st.shared) st.shared = { rentAmount:0, cashBuffer:0, note:"", wantsFuture:false };
-  if (st.shared.wantsFuture == null) st.shared.wantsFuture = false;
-  if (!Array.isArray(st.future)) st.future = [];
-  if (!Array.isArray(st.people)) st.people = [];
-
-  if (!st.quiz) st.quiz = { cur:null, history:[] };
-  if (!Array.isArray(st.quiz.history)) st.quiz.history = [];
-
-  st.people.forEach(p=>{
-    if (!p.debts) p.debts = [];
-    if (p.perPayObligationLabel == null) p.perPayObligationLabel = "Car loan/lease (per pay)";
-    if (p.perPayObligationAmount == null) p.perPayObligationAmount = 0;
-    p.debts.forEach(d=>{
-      if (!d.type) d.type = "cc";
-      if (d.balance == null) d.balance = 0;
-      if (d.apr == null) d.apr = 0;
-      if (d.creditLimit == null) d.creditLimit = 0;
-      if (d.dueDay == null) d.dueDay = 0;
-      if (!d.label) d.label = "Card";
-    });
-    if (p.debts.length === 0){
-      p.debts.push({ id: crypto.randomUUID(), label:"Card 1", type:"cc", dueDay:0, balance:0, apr:0, creditLimit:0 });
-    }
-  });
-
-  return st;
+function loadProfile(){
+  const raw = localStorage.getItem(LS_PROFILE);
+  if (!raw) return defaultProfile();
+  try {
+    const p = JSON.parse(raw);
+    return migrateProfile(p);
+  } catch {
+    return defaultProfile();
+  }
 }
+function saveProfile(p){
+  localStorage.setItem(LS_PROFILE, JSON.stringify(p));
+}
+function migrateProfile(p){
+  if (!p || typeof p !== "object") return defaultProfile();
+  if (!p.v) p.v = 2;
+  if (!p.quick) p.quick = { defaultHorizonDays:90, defaultBufferFloor:0, sameDayOrder:"expensesFirst" };
+  if (!p.rent) p.rent = { amount:0, dueDay:28 };
+  if (!Array.isArray(p.income)) p.income = [];
+  if (!Array.isArray(p.debts)) p.debts = [];
+  if (!Array.isArray(p.planned)) p.planned = [];
+  if (!p.coverage) p.coverage = { start:null, end:null, days:0, count:0, lastImportAt:null };
+  return p;
+}
+function uid(){ return crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2); }
 
-/* ---------- UI ---------- */
+/* =========================================================
+   Tabs / Drawer / Theme
+   ========================================================= */
 function showTab(tab){
   qsa(".seg button").forEach(b=>b.classList.toggle("active", b.dataset.tab===tab));
-  ["setup","today","future","results","settings"].forEach(t=>{
+  ["quick","statements","insights","profile"].forEach(t=>{
     const sec = el("tab-"+t);
     if (sec) sec.classList.toggle("hidden", t !== tab);
   });
 }
-
 function mountTabs(){
   qsa(".seg button").forEach(btn=>{
     btn.addEventListener("click", ()=> showTab(btn.dataset.tab));
   });
 }
-
 function mountDrawer(){
   const open = ()=>{ el("drawer").classList.remove("hidden"); el("backdrop").classList.remove("hidden"); };
   const close = ()=>{ el("drawer").classList.add("hidden"); el("backdrop").classList.add("hidden"); };
@@ -139,787 +209,481 @@ function mountDrawer(){
   el("btnCloseDrawer").addEventListener("click", close);
   el("backdrop").addEventListener("click", close);
 }
-
 function mountTheme(){
   el("btnTheme").addEventListener("click", ()=>{
-    const st = migrate(load() || defaultState());
     const cur = document.documentElement.getAttribute("data-theme") || "dark";
     const next = (cur === "dark") ? "light" : "dark";
     document.documentElement.setAttribute("data-theme", next);
-    st.theme = next;
-    save(st);
+    const p = loadProfile();
+    p.theme = next;
+    saveProfile(p);
   });
 }
 
-/* ---------- Today/Future/Settings render ---------- */
-function renderToday(st){
-  const root = el("peopleToday");
-  root.innerHTML = "";
+/* =========================================================
+   Quick Check UI render
+   ========================================================= */
+function renderQuick(p){
+  document.documentElement.setAttribute("data-theme", p.theme || "dark");
 
-  st.people.slice(0,2).forEach((p, idx)=>{
-    const wrap = document.createElement("div");
-    wrap.className = "card";
-    wrap.style.marginTop = "12px";
-    wrap.innerHTML = `
-      <div class="section-title">
-        <div class="h">${p.name}</div>
-        <div class="muted small">${idx===0 ? "Primary" : "Secondary"}</div>
-      </div>
+  // defaults
+  el("qcHorizonDays").value = p.quick.defaultHorizonDays;
+  el("qcBufferFloor").value = p.quick.defaultBufferFloor;
 
-      <div class="grid">
-        <div class="field">
-          <label>Last pay date</label>
-          <input data-p="${p.id}" data-k="lastPayDate" type="date" value="${p.lastPayDate || ""}">
-        </div>
-        <div class="field">
-          <label>Pay amount (per pay)</label>
-          <input data-p="${p.id}" data-k="payAmount" type="number" step="0.01" value="${p.payAmount || 0}">
-        </div>
-        <div class="field">
-          <label>Cash (optional)</label>
-          <input data-p="${p.id}" data-k="cash" type="number" step="0.01" value="${p.cash || 0}">
-        </div>
-      </div>
+  // rent
+  el("rentAmount").value = p.rent.amount || 0;
+  el("rentDueDay").value = p.rent.dueDay || 28;
 
-      <div class="divider"></div>
-      <div class="muted small" style="margin-bottom:8px;">Debts (balances)</div>
-      <div class="grid" data-debts="${p.id}"></div>
-    `;
-    root.appendChild(wrap);
+  // note
+  el("note").value = p.quick.note || "";
 
-    const debtsGrid = wrap.querySelector(`[data-debts="${p.id}"]`);
-    debtsGrid.innerHTML = "";
-    p.debts.forEach(d=>{
-      const box = document.createElement("div");
-      box.className = "field";
-      box.innerHTML = `
-        <label>${d.label} (${d.type.toUpperCase()})</label>
-        <input data-p="${p.id}" data-debt="${d.id}" data-k="balance" type="number" step="0.01" value="${d.balance || 0}">
-      `;
-      debtsGrid.appendChild(box);
-    });
-  });
+  // cash today (not stored as persistent default; last value only)
+  el("qcCashToday").value = p.quick.lastCashToday ?? 0;
 
-  el("rentAmount").value = st.shared.rentAmount || 0;
-  el("cashBuffer").value = st.shared.cashBuffer || 0;
-  el("note").value = st.shared.note || "";
-}
-
-function renderFuture(st){
-  const tbody = el("futureTbody");
-  tbody.innerHTML = "";
-  st.future.sort((a,b)=>a.date.localeCompare(b.date)).forEach((it, i)=>{
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${it.date}</td>
-      <td>${it.label || ""}</td>
-      <td class="right">${fmt(it.amount)}</td>
-      <td class="right"><button class="ios6-btn danger" data-del="${i}" style="padding:8px 10px;">Delete</button></td>
-    `;
-    tbody.appendChild(tr);
-  });
-
-  tbody.querySelectorAll("button[data-del]").forEach(btn=>{
-    btn.addEventListener("click", ()=>{
-      const st2 = migrate(load() || defaultState());
-      st2.future.splice(Number(btn.dataset.del), 1);
-      save(st2);
-      boot();
-      showTab("future");
-    });
-  });
-}
-
-function renderSettings(st){
-  el("payEveryDays").value = st.settings.payEveryDays;
-  el("horizonDays").value = st.settings.horizonDays;
-  el("rentDueDay").value = st.settings.rentDueDay;
-
-  const root = el("peopleManage");
-  root.innerHTML = "";
-
-  st.people.forEach(p=>{
+  // income list
+  const incRoot = el("incomeList");
+  incRoot.innerHTML = "";
+  p.income.forEach(it=>{
     const card = document.createElement("div");
     card.className = "card";
-    card.style.marginTop = "12px";
+    card.style.marginTop = "10px";
     card.innerHTML = `
       <div class="section-title">
-        <div class="h">${p.name}</div>
-        <button class="ios6-btn danger" data-delperson="${p.id}">Delete</button>
+        <div class="h">${it.label || "Income"}</div>
+        <button class="ios6-btn danger" data-delincome="${it.id}">Delete</button>
       </div>
-
       <div class="grid">
         <div class="field">
-          <label>Name</label>
-          <input data-p="${p.id}" data-k="name" type="text" value="${p.name}">
+          <label>Label</label>
+          <input data-income="${it.id}" data-k="label" type="text" value="${it.label || ""}">
         </div>
         <div class="field">
-          <label>Car loan/lease per pay</label>
-          <input data-p="${p.id}" data-k="perPayObligationAmount" type="number" step="0.01" value="${p.perPayObligationAmount || 0}">
+          <label>Last pay date</label>
+          <input data-income="${it.id}" data-k="lastPayDate" type="date" value="${it.lastPayDate || ""}">
         </div>
         <div class="field">
-          <label>Car loan/lease label</label>
-          <input data-p="${p.id}" data-k="perPayObligationLabel" type="text" value="${p.perPayObligationLabel || "Car loan/lease (per pay)"}">
+          <label>Every (days)</label>
+          <input data-income="${it.id}" data-k="everyDays" type="number" min="1" value="${it.everyDays || 14}">
         </div>
       </div>
-
-      <div class="divider"></div>
-      <div class="section-title">
-        <div class="h">Debts</div>
-        <button class="ios6-btn" data-adddebt="${p.id}">Add debt</button>
+      <div class="grid" style="margin-top:10px;">
+        <div class="field">
+          <label>Amount (per pay)</label>
+          <input data-income="${it.id}" data-k="amount" type="number" step="0.01" value="${it.amount || 0}">
+        </div>
+        <div class="field">
+          <label></label>
+          <div class="note">Used to forecast anchors.</div>
+        </div>
+        <div class="field"></div>
       </div>
-
-      <table>
-        <thead>
-          <tr>
-            <th>Label</th><th style="width:90px;">Type</th><th style="width:90px;">Due</th>
-            <th style="width:100px;">APR%</th><th style="width:140px;" class="right">Balance</th>
-            <th style="width:140px;" class="right">Limit</th><th style="width:110px;"></th>
-          </tr>
-        </thead>
-        <tbody data-debttbody="${p.id}"></tbody>
-      </table>
     `;
-    root.appendChild(card);
+    incRoot.appendChild(card);
+  });
 
-    const dt = card.querySelector(`[data-debttbody="${p.id}"]`);
-    dt.innerHTML = "";
-    p.debts.forEach(d=>{
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td><input data-p="${p.id}" data-debt="${d.id}" data-k="label" type="text" value="${d.label}"></td>
-        <td>
-          <select data-p="${p.id}" data-debt="${d.id}" data-k="type">
+  // debt list
+  const dRoot = el("debtList");
+  dRoot.innerHTML = "";
+  p.debts.forEach(d=>{
+    const card = document.createElement("div");
+    card.className = "card";
+    card.style.marginTop = "10px";
+    card.innerHTML = `
+      <div class="section-title">
+        <div class="h">${d.label || "Debt"}</div>
+        <button class="ios6-btn danger" data-deldebt="${d.id}">Delete</button>
+      </div>
+      <div class="grid">
+        <div class="field">
+          <label>Label</label>
+          <input data-debt="${d.id}" data-k="label" type="text" value="${d.label || ""}">
+        </div>
+        <div class="field">
+          <label>Type</label>
+          <select data-debt="${d.id}" data-k="type">
             <option value="cc" ${d.type==="cc"?"selected":""}>CC</option>
             <option value="loc" ${d.type==="loc"?"selected":""}>LOC</option>
           </select>
-        </td>
-        <td><input data-p="${p.id}" data-debt="${d.id}" data-k="dueDay" type="number" min="1" max="31" value="${d.dueDay || 0}"></td>
-        <td><input data-p="${p.id}" data-debt="${d.id}" data-k="apr" type="number" step="0.01" value="${d.apr || 0}"></td>
-        <td class="right"><input data-p="${p.id}" data-debt="${d.id}" data-k="balance" type="number" step="0.01" value="${d.balance || 0}"></td>
-        <td class="right"><input data-p="${p.id}" data-debt="${d.id}" data-k="creditLimit" type="number" step="0.01" value="${d.creditLimit || 0}"></td>
-        <td class="right"><button class="ios6-btn danger" data-deldebt="${p.id}:${d.id}" style="padding:8px 10px;">Delete</button></td>
-      `;
-      dt.appendChild(tr);
-    });
-
-    card.querySelectorAll("button[data-deldebt]").forEach(b=>{
-      b.addEventListener("click", ()=>{
-        const [pid, did] = b.dataset.deldebt.split(":");
-        const st2 = migrate(load() || defaultState());
-        const p2 = st2.people.find(x=>x.id===pid);
-        p2.debts = p2.debts.filter(x=>x.id!==did);
-        if (p2.debts.length === 0){
-          p2.debts.push({ id: crypto.randomUUID(), label:"Card 1", type:"cc", dueDay:0, balance:0, apr:0, creditLimit:0 });
-        }
-        save(st2);
-        boot();
-        showTab("settings");
-      });
-    });
-
-    card.querySelector("button[data-adddebt]").addEventListener("click", ()=>{
-      const st2 = migrate(load() || defaultState());
-      const p2 = st2.people.find(x=>x.id===p.id);
-      p2.debts.push({ id: crypto.randomUUID(), label:"New debt", type:"cc", dueDay:0, balance:0, apr:0, creditLimit:0 });
-      save(st2);
-      boot();
-      showTab("settings");
-    });
-
-    card.querySelector("button[data-delperson]").addEventListener("click", ()=>{
-      const st2 = migrate(load() || defaultState());
-      st2.people = st2.people.filter(x=>x.id!==p.id);
-      save(st2);
-      boot();
-      showTab("settings");
-    });
+        </div>
+        <div class="field">
+          <label>Due day (1–31)</label>
+          <input data-debt="${d.id}" data-k="dueDay" type="number" min="1" max="31" value="${d.dueDay || 1}">
+        </div>
+      </div>
+      <div class="grid" style="margin-top:10px;">
+        <div class="field">
+          <label>Balance (statement)</label>
+          <input data-debt="${d.id}" data-k="balance" type="number" step="0.01" value="${d.balance || 0}">
+        </div>
+        <div class="field">
+          <label>APR % (LOC only)</label>
+          <input data-debt="${d.id}" data-k="apr" type="number" step="0.01" value="${d.apr || 0}">
+        </div>
+        <div class="field">
+          <label>Credit limit (LOC only)</label>
+          <input data-debt="${d.id}" data-k="creditLimit" type="number" step="0.01" value="${d.creditLimit || 0}">
+        </div>
+      </div>
+    `;
+    dRoot.appendChild(card);
   });
 
-  el("btnAddPerson").onclick = ()=>{
-    const st2 = migrate(load() || defaultState());
-    st2.people.push({
-      id: crypto.randomUUID(),
-      name: `Person ${st2.people.length+1}`,
-      lastPayDate: toISO(addDays(new Date(), -14)),
-      payAmount: 0,
-      cash: 0,
-      perPayObligationLabel: "Car loan/lease (per pay)",
-      perPayObligationAmount: 0,
-      debts: [{ id: crypto.randomUUID(), label:"Card 1", type:"cc", dueDay:0, balance:0, apr:0, creditLimit:0 }]
-    });
-    save(st2);
-    boot();
-    showTab("settings");
-  };
-}
-
-/* ---------- Save on input ---------- */
-function attachInputHandlers(){
-  document.body.addEventListener("input", (e)=>{
-    const t = e.target;
-    const st = migrate(load() || defaultState());
-
-    if (t.id === "rentAmount") st.shared.rentAmount = Number(t.value||0);
-    if (t.id === "cashBuffer") st.shared.cashBuffer = Number(t.value||0);
-    if (t.id === "note") st.shared.note = t.value || "";
-
-    if (t.id === "payEveryDays") st.settings.payEveryDays = Number(t.value||14);
-    if (t.id === "horizonDays") st.settings.horizonDays = Number(t.value||90);
-    if (t.id === "rentDueDay") st.settings.rentDueDay = Number(t.value||28);
-
-    const pid = t.dataset.p;
-    if (pid){
-      const p = st.people.find(x=>x.id===pid);
-      if (!p) return;
-      const k = t.dataset.k;
-
-      if (t.dataset.debt){
-        const d = p.debts.find(x=>x.id===t.dataset.debt);
-        if (!d) return;
-        if (k === "balance") d.balance = Number(t.value||0);
-      } else {
-        if (k === "lastPayDate") p.lastPayDate = t.value || "";
-        if (k === "payAmount") p.payAmount = Number(t.value||0);
-        if (k === "cash") p.cash = Number(t.value||0);
-      }
-    }
-
-    save(st);
+  // planned list
+  const pRoot = el("plannedList");
+  pRoot.innerHTML = "";
+  p.planned.sort((a,b)=>a.date.localeCompare(b.date)).forEach(x=>{
+    const card = document.createElement("div");
+    card.className = "card";
+    card.style.marginTop = "10px";
+    card.innerHTML = `
+      <div class="section-title">
+        <div class="h">${x.label || "Planned"}</div>
+        <button class="ios6-btn danger" data-delplanned="${x.id}">Delete</button>
+      </div>
+      <div class="grid">
+        <div class="field">
+          <label>Date</label>
+          <input data-planned="${x.id}" data-k="date" type="date" value="${x.date || ""}">
+        </div>
+        <div class="field">
+          <label>Amount</label>
+          <input data-planned="${x.id}" data-k="amount" type="number" step="0.01" value="${x.amount || 0}">
+        </div>
+        <div class="field">
+          <label>Label</label>
+          <input data-planned="${x.id}" data-k="label" type="text" value="${x.label || ""}">
+        </div>
+      </div>
+    `;
+    pRoot.appendChild(card);
   });
 }
 
-/* =========================================================
-   Quiz (dynamic debts, setup completion)
-   ========================================================= */
-function startQuiz(st){
-  st.mode = "setup";
-  st.quiz = { cur: { stage:"names", pi:0, di:0, field:"p1name" }, history: [] };
-  save(st);
+function renderProfile(p){
+  el("profileDefaultHorizon").value = p.quick.defaultHorizonDays;
+  el("profileDefaultBuffer").value = p.quick.defaultBufferFloor;
+  el("profileSameDayOrder").value = p.quick.sameDayOrder || "expensesFirst";
 }
 
-function pushHistory(st){
-  st.quiz.history.push(JSON.parse(JSON.stringify(st.quiz.cur)));
-  save(st);
-}
-function popHistory(st){
-  const prev = st.quiz.history.pop();
-  save(st);
-  return prev || null;
-}
+async function renderInsights(p){
+  const count = await idbCount("tx");
+  const cov = await idbGetCoverage();
+  const start = cov.start, end = cov.end;
 
-function stepDesc(st){
-  const p1 = st.people[0], p2 = st.people[1];
-  const cur = st.quiz.cur;
-  if (!cur) return null;
-
-  if (cur.stage === "names"){
-    if (cur.field === "p1name") return { q:"What is Person 1 name?", reason:"Names reduce friction.", type:"text",
-      get:()=>p1.name, set:(v)=>{p1.name=v;} };
-    if (cur.field === "p2name") return { q:"What is Person 2 name?", reason:"Second income stream.", type:"text",
-      get:()=>p2.name, set:(v)=>{p2.name=v;} };
+  let days = 0;
+  if (start && end){
+    const a = parseISO(start), b = parseISO(end);
+    days = Math.floor((b - a)/(24*3600*1000)) + 1;
   }
 
-  if (cur.stage === "house"){
-    if (cur.field === "payEveryDays") return { q:"Pay cycle in days?", reason:"Inflow rhythm.", type:"number", min:1, max:365,
-      get:()=>st.settings.payEveryDays, set:(v)=>{st.settings.payEveryDays=v;} };
-    if (cur.field === "horizonDays") return { q:"Projection horizon in days?", reason:"How far ahead to check risk.", type:"number", min:14, max:365,
-      get:()=>st.settings.horizonDays, set:(v)=>{st.settings.horizonDays=v;} };
-    if (cur.field === "rentAmount") return { q:"Rent amount?", reason:"Largest fixed bill.", type:"money",
-      get:()=>st.shared.rentAmount, set:(v)=>{st.shared.rentAmount=v;} };
-    if (cur.field === "rentDueDay") return { q:"Rent due day (1–31)?", reason:"Schedules next rent.", type:"number", min:1, max:31,
-      get:()=>st.settings.rentDueDay, set:(v)=>{st.settings.rentDueDay=v;} };
-  }
+  const level =
+    count === 0 ? "None" :
+    days >= 180 ? "High" :
+    days >= 60 ? "Medium" : "Low";
 
-  if (cur.stage === "person"){
-    const p = st.people[cur.pi];
-    const who = p.name || `Person ${cur.pi+1}`;
+  el("coverageKpis").innerHTML = `
+    <div class="kpi"><div class="t">Coverage</div><div class="v">${start && end ? `${start} → ${end}` : "None"}</div><div class="small muted">${days} days</div></div>
+    <div class="kpi"><div class="t">Transactions</div><div class="v">${count}</div><div class="small muted">Stored on device</div></div>
+    <div class="kpi"><div class="t">Accuracy</div><div class="v">${level}</div><div class="small muted">${level==="None" ? "Import statements to enable insights" : "Charts should disclose coverage"}</div></div>
+  `;
 
-    if (cur.field === "lastPayDate") return { q:`${who}: last pay date?`, reason:"Derives next pay.", type:"date",
-      get:()=>p.lastPayDate, set:(v)=>{p.lastPayDate=v;} };
-    if (cur.field === "payAmount") return { q:`${who}: pay amount (per pay)?`, reason:"Income to cover bills.", type:"money",
-      get:()=>p.payAmount, set:(v)=>{p.payAmount=v;} };
-    if (cur.field === "cash") return { q:`${who}: cash on hand (optional)?`, reason:"Starting cash improves accuracy.", type:"money", optional:true,
-      get:()=>p.cash, set:(v)=>{p.cash=v;} };
-    if (cur.field === "emi") return { q:`${who}: car loan/lease per pay (optional)?`, reason:"This reduces each paycheck.", type:"money", optional:true,
-      get:()=>p.perPayObligationAmount, set:(v)=>{p.perPayObligationAmount=v; p.perPayObligationLabel="Car loan/lease (per pay)";} };
-  }
-
-  if (cur.stage === "debt"){
-    const p = st.people[cur.pi];
-    const who = p.name || `Person ${cur.pi+1}`;
-    const d = p.debts[cur.di];
-
-    if (cur.field === "label") return { q:`${who}: card/LOC #${cur.di+1} name?`, reason:"Example: AMEX, Scotia, LOC.", type:"text",
-      get:()=>d.label, set:(v)=>{d.label=v;} };
-
-    if (cur.field === "type") return { q:`${who}: ${d.label} type?`, reason:"CC = pay full; LOC = minimum + borrow option.", type:"select", options:["cc","loc"],
-      get:()=>d.type, set:(v)=>{d.type=v;} };
-
-    if (cur.field === "dueDay") return { q:`${who}: ${d.label} due day (1–31)?`, reason:"Schedules next due date.", type:"number", min:1, max:31,
-      get:()=>d.dueDay, set:(v)=>{d.dueDay=v;} };
-
-    if (cur.field === "apr"){
-      if (d.type !== "loc") return { skip:true };
-      return { q:`${who}: ${d.label} APR % ?`, reason:"Used for interest estimate.", type:"number", min:0, max:200,
-        get:()=>d.apr, set:(v)=>{d.apr=v;} };
-    }
-
-    if (cur.field === "creditLimit"){
-      if (d.type !== "loc") return { skip:true };
-      return { q:`${who}: ${d.label} credit limit?`, reason:"Borrowing capacity = limit − balance.", type:"money",
-        get:()=>d.creditLimit, set:(v)=>{d.creditLimit=v;} };
-    }
-
-    if (cur.field === "balance") return {
-      q:`${who}: ${d.label} balance / statement amount?`,
-      reason: d.type==="cc" ? "CC must be paid in full." : "Used to compute LOC minimum and capacity.",
-      type:"money",
-      get:()=>d.balance,
-      set:(v)=>{d.balance=v;}
-    };
-
-    if (cur.field === "addMore") return {
-      q:`${who}: add another credit card or LOC?`,
-      reason:"Add only what you use.",
-      type:"select",
-      options:["no","yes"],
-      get:()=> "no",
-      set:(v)=>{ /* handled in advance */ }
-    };
-  }
-
-  if (cur.stage === "finish"){
-    if (cur.field === "cashBuffer") return { q:"House cash buffer (optional)?", reason:"Strict: keep 0.", type:"money", optional:true,
-      get:()=>st.shared.cashBuffer, set:(v)=>{st.shared.cashBuffer=v;} };
-    if (cur.field === "note") return { q:"Optional note?", reason:"Context only.", type:"text", optional:true,
-      get:()=>st.shared.note, set:(v)=>{st.shared.note=v;} };
-    if (cur.field === "wantsFuture") return { q:"Do you have future expenses to add now?", reason:"Yes → Future tab. No → Decision.", type:"select", options:["no","yes"],
-      get:()=> (st.shared.wantsFuture ? "yes" : "no"), set:(v)=>{st.shared.wantsFuture=(v==="yes");} };
-  }
-
-  return null;
-}
-
-function renderQuiz(st){
-  const desc = stepDesc(st);
-  if (!desc) return;
-
-  // auto-skip
-  if (desc.skip){
-    advance(st, true);
-    renderQuiz(st);
-    return;
-  }
-
-  el("quizProgress").textContent = "STEP";
-  el("quizProgressFill").style.width = "0%";
-
-  el("quizQuestion").textContent = desc.q || "";
-  el("quizReason").textContent = desc.reason || "";
-  el("quizNote").textContent = "";
-
-  const wrap = el("quizInput");
-  wrap.innerHTML = "";
-
-  let input;
-  if (desc.type === "select"){
-    input = document.createElement("select");
-    input.innerHTML = (desc.options||[]).map(o=>`<option value="${o}">${o.toUpperCase()}</option>`).join("");
-    input.value = desc.get() ?? (desc.options?.[0] || "");
+  if (count === 0){
+    el("insightsBody").innerHTML = `
+      Import statements to enable insights. Quick Check works without statements.
+      <br><br>
+      Recommendation: import <b>3–6 months</b> for stable budget baselines.
+    `;
   } else {
-    input = document.createElement("input");
-    input.type = desc.type==="date" ? "date" : (desc.type==="text" ? "text" : "number");
-    if (desc.type==="money") input.step = "0.01";
-    if (desc.type==="number") input.step = "1";
-    if (desc.min != null) input.min = String(desc.min);
-    if (desc.max != null) input.max = String(desc.max);
-    input.value = desc.get() ?? "";
+    el("insightsBody").innerHTML = `
+      Statements exist. Next step: categorization rules (non-AI, rule-based), then charts.
+      <br><br>
+      This build intentionally does not show misleading charts yet.
+    `;
   }
-
-  // phone-safe width
-  input.style.width = "100%";
-  input.style.maxWidth = "420px";
-  input.style.display = "block";
-  input.style.margin = "0 auto";
-
-  wrap.appendChild(input);
-
-  el("quizBack").disabled = (st.quiz.history.length === 0);
-  el("quizNext").textContent = "Next";
-}
-
-function commitQuiz(st){
-  const desc = stepDesc(st);
-  if (!desc || desc.skip) return true;
-
-  const control = el("quizInput").querySelector("input, select");
-  if (!control) return true;
-
-  let v = control.value;
-
-  if (desc.type === "money" || desc.type === "number"){
-    v = Number(v || 0);
-  }
-
-  if (!desc.optional){
-    if (desc.type==="text" && String(v).trim()===""){ el("quizNote").textContent = "Required."; return false; }
-    if (desc.type==="date" && String(v).trim()===""){ el("quizNote").textContent = "Pick a date."; return false; }
-  }
-
-  desc.set(v);
-  save(st);
-  return true;
-}
-
-function advance(st, autoSkip=false){
-  if (!autoSkip) pushHistory(st);
-
-  const cur = st.quiz.cur;
-
-  if (cur.stage === "names"){
-    if (cur.field === "p1name"){ cur.field="p2name"; save(st); return; }
-    if (cur.field === "p2name"){ st.quiz.cur = { stage:"house", pi:0, di:0, field:"payEveryDays" }; save(st); return; }
-  }
-
-  if (cur.stage === "house"){
-    if (cur.field === "payEveryDays"){ cur.field="horizonDays"; save(st); return; }
-    if (cur.field === "horizonDays"){ cur.field="rentAmount"; save(st); return; }
-    if (cur.field === "rentAmount"){ cur.field="rentDueDay"; save(st); return; }
-    if (cur.field === "rentDueDay"){ st.quiz.cur = { stage:"person", pi:0, di:0, field:"lastPayDate" }; save(st); return; }
-  }
-
-  if (cur.stage === "person"){
-    if (cur.field === "lastPayDate"){ cur.field="payAmount"; save(st); return; }
-    if (cur.field === "payAmount"){ cur.field="cash"; save(st); return; }
-    if (cur.field === "cash"){ cur.field="emi"; save(st); return; }
-    if (cur.field === "emi"){ st.quiz.cur = { stage:"debt", pi:cur.pi, di:0, field:"label" }; save(st); return; }
-  }
-
-  if (cur.stage === "debt"){
-    const p = st.people[cur.pi];
-
-    if (cur.field === "label"){ cur.field="type"; save(st); return; }
-    if (cur.field === "type"){ cur.field="dueDay"; save(st); return; }
-    if (cur.field === "dueDay"){ cur.field="apr"; save(st); return; }
-    if (cur.field === "apr"){ cur.field="creditLimit"; save(st); return; }
-    if (cur.field === "creditLimit"){ cur.field="balance"; save(st); return; }
-    if (cur.field === "balance"){ cur.field="addMore"; save(st); return; }
-
-    if (cur.field === "addMore"){
-      const control = el("quizInput").querySelector("select");
-      const ans = control ? control.value : "no";
-
-      if (ans === "yes"){
-        p.debts.push({ id: crypto.randomUUID(), label:"New debt", type:"cc", dueDay:0, balance:0, apr:0, creditLimit:0 });
-        save(st);
-        st.quiz.cur = { stage:"debt", pi:cur.pi, di:p.debts.length-1, field:"label" };
-        save(st);
-        return;
-      }
-
-      if (cur.pi === 0){
-        st.quiz.cur = { stage:"person", pi:1, di:0, field:"lastPayDate" };
-        save(st);
-        return;
-      } else {
-        st.quiz.cur = { stage:"finish", pi:0, di:0, field:"cashBuffer" };
-        save(st);
-        return;
-      }
-    }
-  }
-
-  if (cur.stage === "finish"){
-    if (cur.field === "cashBuffer"){ cur.field="note"; save(st); return; }
-    if (cur.field === "note"){ cur.field="wantsFuture"; save(st); return; }
-
-    if (cur.field === "wantsFuture"){
-      // ***** IMPORTANT FIX: setup completes and quiz is cleared *****
-      st.mode = "run";
-      st.quiz.cur = null;
-      st.quiz.history = [];
-      save(st);
-
-      boot(); // renders screens + decision
-
-      if (st.shared.wantsFuture) showTab("future");
-      else showTab("results");
-      return;
-    }
-  }
-}
-
-function goBack(st){
-  const prev = popHistory(st);
-  if (!prev) return;
-  st.quiz.cur = prev;
-  save(st);
 }
 
 /* =========================================================
-   Decision engine + text-only Results
+   Simulation (anchor-first)
+   SAFE = minBalance >= bufferFloor
    ========================================================= */
 function estInterest(amount, aprPct, days){
   if (amount <= 0 || !aprPct || aprPct <= 0 || days <= 0) return 0;
   return amount * (aprPct/100) * (days/365);
 }
-
-function locCapacity(st){
-  let totalAvail = 0;
-  const locs = [];
-  st.people.forEach(p=>{
-    (p.debts||[]).forEach(d=>{
-      if (d.type !== "loc") return;
+function locCapacity(p){
+  const locs = (p.debts||[])
+    .filter(d=>d.type==="loc")
+    .map(d=>{
       const lim = Number(d.creditLimit||0);
       const bal = Number(d.balance||0);
-      const avail = Math.max(0, lim - bal);
-      const apr = Number(d.apr||0);
-      totalAvail += avail;
-      locs.push({ owner:p.name, label:d.label, avail, apr });
-    });
-  });
-  locs.sort((a,b)=> (a.apr||999)-(b.apr||999));
+      return { label:d.label, apr:Number(d.apr||0), avail: Math.max(0, lim - bal) };
+    })
+    .filter(x=>x.avail>0)
+    .sort((a,b)=>(a.apr||999)-(b.apr||999));
+  const totalAvail = locs.reduce((s,x)=>s+x.avail,0);
   return { totalAvail, best: locs[0] || null };
 }
 
-function compute(st){
-  const today = new Date(); today.setHours(0,0,0,0);
-  const every = st.settings.payEveryDays || 14;
-  const horizon = st.settings.horizonDays || 90;
-
+function buildEvents(p, today, horizonDays){
+  const end = addDays(today, horizonDays);
   const events = [];
   const warnings = [];
 
-  let cashStart = Number(st.shared.cashBuffer||0);
-  st.people.forEach(p=> cashStart += Number(p.cash||0));
+  // incomes: recurring by each stream
+  (p.income||[]).forEach(inc=>{
+    const lp = parseISO(inc.lastPayDate);
+    const every = Number(inc.everyDays||14);
+    const amt = Number(inc.amount||0);
+    if (!lp){ warnings.push(`${inc.label||"Income"}: missing last pay date`); return; }
+    if (!every || every < 1){ warnings.push(`${inc.label||"Income"}: invalid cadence`); return; }
+    if (!amt){ warnings.push(`${inc.label||"Income"}: amount is 0`); }
 
-  // pay + car EMI per pay
-  st.people.forEach(p=>{
-    const lp = parseISO(p.lastPayDate);
-    if (!lp) { warnings.push(`${p.name}: missing last pay date`); return; }
-    let pay = nextPayFromLast(today, lp, every);
-    while (pay <= addDays(today, horizon)){
-      events.push({ date: toISO(pay), name: `${p.name} pay`, inflow: Number(p.payAmount||0), outflow: 0 });
+    // next pay after today
+    let d = new Date(lp);
+    while (d <= today) d = addDays(d, every);
 
-      const emi = Number(p.perPayObligationAmount||0);
-      if (emi > 0){
-        events.push({ date: toISO(pay), name: `${p.name}: ${p.perPayObligationLabel || "Car loan/lease"} `, inflow: 0, outflow: emi });
-      }
-
-      pay = addDays(pay, every);
+    while (d <= end){
+      events.push({ date: toISO(d), name: `${inc.label||"Income"} pay`, inflow: amt, outflow: 0 });
+      d = addDays(d, every);
     }
   });
 
-  // rent once
-  const rentDue = nextDueByDay(today, st.settings.rentDueDay);
-  if (rentDue && (st.shared.rentAmount||0) > 0){
-    events.push({ date: toISO(rentDue), name: `Rent`, inflow: 0, outflow: Number(st.shared.rentAmount||0) });
+  // rent: monthly recurring within horizon (if configured)
+  const rentAmt = Number(p.rent?.amount||0);
+  const rentDay = Number(p.rent?.dueDay||0);
+  if (rentAmt > 0 && rentDay >= 1){
+    let due = nextDueByDay(today, rentDay);
+    while (due && due <= end){
+      events.push({ date: toISO(due), name: "Rent", inflow: 0, outflow: rentAmt });
+      due = addMonths(due, 1);
+    }
   }
 
-  // debts once: CC full; LOC minimum interest-only
-  st.people.forEach(p=>{
-    (p.debts||[]).forEach(d=>{
-      if (!d.dueDay || d.dueDay < 1) return;
-      const due = nextDueByDay(today, d.dueDay);
-      if (!due) return;
-      const bal = Number(d.balance||0);
-      if (bal <= 0) return;
+  // debts: monthly recurring within horizon
+  (p.debts||[]).forEach(d=>{
+    const dueDay = Number(d.dueDay||0);
+    const bal = Number(d.balance||0);
+    if (!dueDay || dueDay < 1) return;
+    if (bal <= 0) return;
 
+    let due = nextDueByDay(today, dueDay);
+    while (due && due <= end){
       if (d.type === "cc"){
-        events.push({ date: toISO(due), name: `${p.name}: ${d.label} (CC full)`, inflow: 0, outflow: bal });
+        events.push({ date: toISO(due), name: `${d.label} (CC full)`, inflow: 0, outflow: bal, debtId:d.id });
       } else {
         const apr = Number(d.apr||0);
-        const minPay = (apr > 0) ? (bal * (apr/100) / 12) : 0;
-        if (apr <= 0) warnings.push(`${p.name}: ${d.label} is LOC but APR is 0 → minimum assumed 0`);
-        events.push({ date: toISO(due), name: `${p.name}: ${d.label} (LOC minimum)`, inflow: 0, outflow: minPay });
+        const minPay = apr > 0 ? (bal * (apr/100) / 12) : 0;
+        if (apr <= 0) warnings.push(`${d.label}: LOC APR is 0 → minimum assumed 0`);
+        events.push({ date: toISO(due), name: `${d.label} (LOC minimum)`, inflow: 0, outflow: minPay, debtId:d.id });
       }
-    });
-  });
-
-  // future items included
-  (st.future||[]).forEach(x=>{
-    if (x?.date && Number(x.amount||0) !== 0){
-      events.push({ date: x.date, name: `Future: ${x.label||"Expense"}`, inflow: 0, outflow: Number(x.amount||0) });
+      due = addMonths(due, 1);
     }
   });
 
+  // planned (one-time)
+  (p.planned||[]).forEach(x=>{
+    if (x?.date && Number(x.amount||0) !== 0){
+      const d = parseISO(x.date);
+      if (d >= today && d <= end){
+        events.push({ date: x.date, name: `Planned: ${x.label||"Expense"}`, inflow: 0, outflow: Number(x.amount||0) });
+      }
+    }
+  });
+
+  // sort by date, then same-day ordering
   events.sort((a,b)=>{
     if (a.date !== b.date) return a.date.localeCompare(b.date);
-    return (b.inflow - a.inflow) || (a.outflow - b.outflow);
+    if ((p.quick.sameDayOrder||"expensesFirst") === "expensesFirst"){
+      // outflow first (conservative)
+      if ((a.outflow||0) !== (b.outflow||0)) return (b.outflow||0) - (a.outflow||0);
+      return (b.inflow||0) - (a.inflow||0);
+    } else {
+      // income first
+      if ((a.inflow||0) !== (b.inflow||0)) return (b.inflow||0) - (a.inflow||0);
+      return (b.outflow||0) - (a.outflow||0);
+    }
   });
 
-  let bal = cashStart;
-  let minBal = bal;
-  let firstNeg = null;
-  let firstNegRow = null;
-
-  const rows = events
-    .filter(e=>{
-      const d = parseISO(e.date);
-      return d >= today && d <= addDays(today, horizon);
-    })
-    .map(e=>{
-      bal = bal + (e.inflow||0) - (e.outflow||0);
-      if (bal < minBal) minBal = bal;
-      if (bal < 0 && !firstNeg){
-        firstNeg = e.date;
-        firstNegRow = { ...e, balance: bal };
-      }
-      return { ...e, balance: bal };
-    });
-
-  const nextPays = st.people
-    .map(p=>parseISO(p.lastPayDate))
-    .filter(Boolean)
-    .map(lp=>nextPayFromLast(today, lp, every))
-    .sort((a,b)=>a-b);
-
-  const nextPay = nextPays[0] || addDays(today, every);
-  const nextPay2 = addDays(nextPay, every);
-
-  const inflow1 = rows.filter(r=> parseISO(r.date) <= nextPay).reduce((s,r)=>s+r.inflow,0);
-  const out1 = rows.filter(r=> parseISO(r.date) <= nextPay && r.outflow>0).reduce((s,r)=>s+r.outflow,0);
-  const inflow2 = rows.filter(r=> parseISO(r.date) <= nextPay2).reduce((s,r)=>s+r.inflow,0);
-  const out2 = rows.filter(r=> parseISO(r.date) <= nextPay2 && r.outflow>0).reduce((s,r)=>s+r.outflow,0);
-
-  return { today:toISO(today), cashStart, nextPay:toISO(nextPay), nextPay2:toISO(nextPay2),
-           inflow1,out1,inflow2,out2, rows, minBal, firstNeg, firstNegRow, warnings };
+  return { events, warnings };
 }
 
-function renderResults(st, model){
-  // Decide next bill (blocking)
-  let verdict = "SAFE";
-  let blockingName = "";
-  let blockingDate = "";
-  let shortBy = 0;
-  let actionLine = "Final instruction: Pay as usual.";
-  let interestLine = "";
+function runSimulation(p, cashStart, bufferFloor, horizonDays){
+  const today = new Date(); today.setHours(0,0,0,0);
+  const { events, warnings } = buildEvents(p, today, horizonDays);
 
-  if (model.firstNegRow){
-    verdict = "UNSAFE";
-    blockingName = model.firstNegRow.name;
-    blockingDate = model.firstNegRow.date;
-    shortBy = Math.abs(model.firstNegRow.balance);
+  let bal = Number(cashStart||0);
+  let minBal = bal;
+  let minDate = toISO(today);
+  let firstBreach = null;
 
-    const cap = locCapacity(st);
-    if (cap.totalAvail > 0){
-      const borrow = Math.min(shortBy, cap.totalAvail);
-      const best = cap.best;
-      const apr = best?.apr || 0;
+  const rows = [];
+  for (const e of events){
+    bal = bal + (e.inflow||0) - (e.outflow||0);
+    rows.push({ ...e, balance: bal });
 
-      const blockDate = parseISO(blockingDate);
-      const nextPayDate = parseISO(model.nextPay);
-      const days = Math.max(1, Math.floor((nextPayDate - blockDate)/(24*3600*1000)));
-      const iCost = estInterest(borrow, apr, days);
+    if (bal < minBal){
+      minBal = bal;
+      minDate = e.date;
+    }
+    if (!firstBreach && bal < bufferFloor){
+      firstBreach = { ...e, balance: bal };
+    }
+  }
 
-      actionLine = `Best action: Borrow $${fmt(borrow)} from LOC (lowest APR: ${best.owner} • ${best.label}).`;
-      interestLine = `Interest estimate: ~$${fmt(iCost)} for ${days} days.`;
+  return {
+    today: toISO(today),
+    cashStart: Number(cashStart||0),
+    bufferFloor: Number(bufferFloor||0),
+    horizonDays,
+    rows,
+    minBal,
+    minDate,
+    firstBreach,
+    warnings
+  };
+}
 
-      if (borrow < shortBy){
-        actionLine += ` LOC limit not enough. Remaining unfunded: $${fmt(shortBy-borrow)}.`;
-      }
-      if (!apr || apr<=0){
-        interestLine += ` (APR missing → set APR for accuracy.)`;
+function anchorWindows(p){
+  // anchors: rent + each debt next due date (single next due)
+  const today = new Date(); today.setHours(0,0,0,0);
+  const anchors = [];
+
+  // rent anchor
+  const rentDay = Number(p.rent?.dueDay||0);
+  const rentAmt = Number(p.rent?.amount||0);
+  if (rentDay>=1 && rentAmt>0){
+    const due = nextDueByDay(today, rentDay);
+    if (due){
+      anchors.push({ id:"rent", label:`Rent`, date: toISO(due) });
+    }
+  }
+
+  // each debt anchor
+  (p.debts||[]).forEach(d=>{
+    const dueDay = Number(d.dueDay||0);
+    if (!dueDay) return;
+    const due = nextDueByDay(today, dueDay);
+    if (!due) return;
+    anchors.push({ id:d.id, label:`${d.label} (${(d.type||"cc").toUpperCase()})`, date: toISO(due) });
+  });
+
+  // sort by date
+  anchors.sort((a,b)=>a.date.localeCompare(b.date));
+  return anchors;
+}
+
+function summarizeToDate(model, untilISO){
+  const until = parseISO(untilISO);
+  let bal = model.cashStart;
+  let minBal = bal;
+  let minDate = model.today;
+  let firstBreach = null;
+
+  for (const r of model.rows){
+    const d = parseISO(r.date);
+    if (d > until) break;
+    bal = r.balance;
+    if (bal < minBal){
+      minBal = bal;
+      minDate = r.date;
+    }
+    if (!firstBreach && bal < model.bufferFloor){
+      firstBreach = { ...r };
+    }
+  }
+
+  const ok = (minBal >= model.bufferFloor);
+  return { ok, minBal, minDate, firstBreach, endBalance: bal };
+}
+
+function renderAnchors(p, model){
+  const anchors = anchorWindows(p);
+
+  const wrap = document.createElement("div");
+  wrap.className = "anchor-grid";
+
+  if (!anchors.length){
+    el("anchorCards").innerHTML = `
+      <div class="note">
+        Add Rent and/or Debts to create anchors. Anchors are what makes decisions easy to interpret.
+      </div>
+    `;
+    return;
+  }
+
+  anchors.forEach(a=>{
+    const s = summarizeToDate(model, a.date);
+    const status = s.ok ? "SAFE" : "NOT SAFE";
+
+    let cause = "";
+    let action = "";
+    if (!s.ok && s.firstBreach){
+      cause = `First breach: ${s.firstBreach.date} — ${s.firstBreach.name}`;
+      const shortBy = Math.max(0, model.bufferFloor - s.firstBreach.balance);
+
+      const cap = locCapacity(p);
+      if (cap.totalAvail > 0 && cap.best){
+        const borrow = Math.min(shortBy, cap.totalAvail);
+        const days = Math.max(1, Math.floor((parseISO(a.date) - parseISO(s.firstBreach.date))/(24*3600*1000)));
+        const iCost = estInterest(borrow, cap.best.apr, days);
+        action = `Action: borrow $${fmtMoney(borrow)} from LOC (${cap.best.label}) • est. interest ~$${fmtMoney(iCost)}.`;
+        if (borrow < shortBy){
+          action += ` Remaining gap: $${fmtMoney(shortBy - borrow)}.`;
+        }
+      } else {
+        action = `Action: reduce/delay spend or add LOC details (limit+APR) to compute a funding option.`;
       }
     } else {
-      actionLine = `Best action: Borrow from LOC, but no LOC credit limit is set. Enter LOC limit + APR in Settings.`;
-      interestLine = "";
+      action = `Action: proceed as usual.`;
     }
-  } else {
-    // SAFE: show next outflow as "next bill"
-    const nextOut = (model.rows||[]).find(r => (r.outflow||0) > 0);
-    if (nextOut){
-      blockingName = nextOut.name;
-      blockingDate = nextOut.date;
-    }
-  }
 
-  let html = `
-    <div class="h">Results</div>
-    <div style="font-size:20px;font-weight:950;margin-top:6px;" class="${verdict==="SAFE"?"good":"bad"}">
-      ${verdict==="SAFE" ? "✅ DECISION: SAFE" : "❌ DECISION: UNSAFE"}
-    </div>
-  `;
-
-  if (blockingName && blockingDate){
-    html += `
-      <div style="margin-top:10px;">
-        <div class="muted small">Blocking bill</div>
-        <div style="font-weight:900;">${blockingName}</div>
-        <div class="small muted">Due: ${blockingDate}</div>
+    const card = document.createElement("div");
+    card.className = "anchor-card";
+    card.innerHTML = `
+      <div class="anchor-top">
+        <div>
+          <div class="anchor-title">${a.label}</div>
+          <div class="anchor-meta">Anchor date: ${a.date}</div>
+        </div>
+        <div class="anchor-status">
+          <span class="badge ${status==="SAFE"?"good":"bad"}">${status}</span>
+        </div>
       </div>
+      <div class="anchor-meta">
+        Lowest balance: <b>${fmtMoney(s.minBal)}</b> on <b>${s.minDate}</b><br>
+        Buffer floor: <b>${fmtMoney(model.bufferFloor)}</b>
+        ${cause ? `<br>${cause}` : ""}
+      </div>
+      <div class="anchor-action">${action}</div>
     `;
-  }
+    wrap.appendChild(card);
+  });
 
-  // Future expense mention (always if mode on or items exist)
-  const fx = (st.future || []).slice().sort((a,b)=>a.date.localeCompare(b.date));
-  if (fx.length > 0){
-    const nextFx = fx[0];
-    html += `
-      <div style="margin-top:12px;">
-        <div class="muted small">Future expenses</div>
-        <div style="font-weight:900;">Included: ${fx.length} item(s)</div>
-        <div class="small muted">Next: ${nextFx.date} — $${fmt(nextFx.amount)} ${nextFx.label ? "• "+nextFx.label : ""}</div>
-      </div>
-    `;
-  } else if (st.shared.wantsFuture){
-    html += `
-      <div style="margin-top:12px;">
-        <div class="muted small">Future expenses</div>
-        <div style="font-weight:900;">Mode is ON, but none added yet.</div>
-        <div class="small muted">Add expenses in the Future tab, then tap Compute.</div>
-      </div>
-    `;
-  }
+  el("anchorCards").innerHTML = "";
+  el("anchorCards").appendChild(wrap);
+}
 
-  if (verdict === "UNSAFE"){
-    html += `
-      <div style="margin-top:12px;">
-        <div class="muted small">Shortfall</div>
-        <div style="font-weight:950;">Short by: $${fmt(shortBy)}</div>
-      </div>
-      <div style="margin-top:12px;">
-        <div style="font-weight:900;">${actionLine}</div>
-        ${interestLine ? `<div class="small muted" style="margin-top:6px;">${interestLine}</div>` : ``}
-      </div>
-      <div style="margin-top:12px;font-weight:950;">
-        Final instruction: Do the above action before the due date.
-      </div>
-    `;
-  } else {
-    html += `
-      <div style="margin-top:12px;font-weight:900;">
-        ${actionLine}
-      </div>
-    `;
-  }
-
-  el("decisionText").innerHTML = html;
-
-  // details (optional)
-  const surplus1 = (model.cashStart + model.inflow1) - model.out1;
-  const surplus2 = (model.cashStart + model.inflow2) - model.out2;
-
+function renderDetails(model){
+  // KPIs
   el("kpiGrid").innerHTML = `
-    <div class="kpi"><div class="t">Today</div><div class="v">${model.today}</div><div class="small muted">Start: ${fmt(model.cashStart)}</div></div>
-    <div class="kpi"><div class="t">Next pay</div><div class="v">${model.nextPay}</div><div class="small muted">Earliest pay</div></div>
-    <div class="kpi"><div class="t">By next pay</div><div class="v ${surplus1>=0?"good":"bad"}">${surplus1>=0?"+":""}${fmt(surplus1)}</div><div class="small muted">Out ≤ next: ${fmt(model.out1)}</div></div>
-    <div class="kpi"><div class="t">By 2nd pay</div><div class="v ${surplus2>=0?"good":"bad"}">${surplus2>=0?"+":""}${fmt(surplus2)}</div><div class="small muted">Out ≤ 2nd: ${fmt(model.out2)}</div></div>
-    <div class="kpi"><div class="t">Minimum</div><div class="v ${model.minBal>=0?"good":"bad"}">${fmt(model.minBal)}</div><div class="small muted">${model.firstNeg ? "First neg: "+model.firstNeg : "No neg in horizon"}</div></div>
-    <div class="kpi"><div class="t">Horizon</div><div class="v">${st.settings.horizonDays}d</div><div class="small muted">Cycle: ${st.settings.payEveryDays}d</div></div>
+    <div class="kpi"><div class="t">Today</div><div class="v">${model.today}</div><div class="small muted">Start: ${fmtMoney(model.cashStart)}</div></div>
+    <div class="kpi"><div class="t">Buffer floor</div><div class="v">${fmtMoney(model.bufferFloor)}</div><div class="small muted">SAFE means never below this</div></div>
+    <div class="kpi"><div class="t">Minimum</div><div class="v ${model.minBal>=model.bufferFloor?"good":"bad"}">${fmtMoney(model.minBal)}</div><div class="small muted">On ${model.minDate}</div></div>
   `;
 
+  // rows table
   const tbody = el("eventsTbody");
   tbody.innerHTML = "";
   (model.rows||[]).forEach(r=>{
     const tr = document.createElement("tr");
+    const flag = (r.balance < model.bufferFloor) ? '<span class="bad">BREACH</span>' : "";
     tr.innerHTML = `
-      <td>${r.date}</td><td>${r.name}</td>
-      <td class="right">${r.inflow?fmt(r.inflow):""}</td>
-      <td class="right">${r.outflow?fmt(r.outflow):""}</td>
-      <td class="right">${fmt(r.balance)}</td>
-      <td>${r.balance<0 ? '<span class="bad">NEGATIVE</span>' : ""}</td>
+      <td>${r.date}</td>
+      <td>${r.name}</td>
+      <td class="right">${r.inflow?fmtMoney(r.inflow):""}</td>
+      <td class="right">${r.outflow?fmtMoney(r.outflow):""}</td>
+      <td class="right">${fmtMoney(r.balance)}</td>
+      <td>${flag}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -929,50 +693,389 @@ function renderResults(st, model){
     : "";
 }
 
-/* ---------- Buttons ---------- */
-function wireButtons(){
-  // quiz
-  el("quizBack").onclick = ()=>{
-    const st = migrate(load() || defaultState());
-    if (!st.quiz.cur) startQuiz(st);
-    const prev = popHistory(st);
-    if (prev){ st.quiz.cur = prev; save(st); }
-    renderQuiz(st);
+/* =========================================================
+   CSV parsing + mapping wizard (bank-agnostic)
+   ========================================================= */
+function detectDelimiter(text){
+  const sample = text.split(/\r?\n/).slice(0,5).join("\n");
+  const candidates = [",",";","\t","|"];
+  let best = ",", bestScore = -1;
+  for (const d of candidates){
+    const score = (sample.match(new RegExp(`\\${d}`, "g")) || []).length;
+    if (score > bestScore){ bestScore = score; best = d; }
+  }
+  return best;
+}
+
+// minimal CSV parser (supports quotes; not perfect but works for typical exports)
+function parseCSV(text, delimiter){
+  const rows = [];
+  let cur = [], field = "", inQuotes = false;
+
+  for (let i=0;i<text.length;i++){
+    const ch = text[i];
+    const next = text[i+1];
+
+    if (ch === '"'){
+      if (inQuotes && next === '"'){ field += '"'; i++; }
+      else inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (!inQuotes && ch === delimiter){
+      cur.push(field); field = ""; continue;
+    }
+
+    if (!inQuotes && (ch === "\n" || ch === "\r")){
+      if (ch === "\r" && next === "\n") i++;
+      cur.push(field);
+      rows.push(cur);
+      cur = [];
+      field = "";
+      continue;
+    }
+
+    field += ch;
+  }
+  if (field.length || cur.length){
+    cur.push(field);
+    rows.push(cur);
+  }
+  return rows.filter(r=>r.some(x=>String(x||"").trim()!==""));
+}
+
+function parseDateFlexible(s){
+  const t = String(s||"").trim();
+  if (!t) return null;
+
+  // ISO
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+
+  // MM/DD/YYYY or DD/MM/YYYY
+  const m = t.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
+  if (m){
+    const a = Number(m[1]), b = Number(m[2]), y = Number(m[3]);
+    // heuristic: if first > 12 => DD/MM
+    let mm = a, dd = b;
+    if (a > 12){ dd = a; mm = b; }
+    mm = clamp(mm,1,12);
+    dd = clamp(dd,1,31);
+    return `${y}-${String(mm).padStart(2,"0")}-${String(dd).padStart(2,"0")}`;
+  }
+
+  return null;
+}
+
+function parseAmountFlexible(s){
+  let t = String(s||"").trim();
+  if (!t) return 0;
+  // remove currency symbols/spaces
+  t = t.replace(/[,$]/g,"").replace(/\s+/g,"");
+  // parentheses => negative
+  let neg = false;
+  if (t.startsWith("(") && t.endsWith(")")){ neg = true; t = t.slice(1,-1); }
+  const v = Number(t);
+  if (!isFinite(v)) return 0;
+  return neg ? -v : v;
+}
+
+function normalizeRows(rows, map){
+  const headers = map.headers;
+  const idx = (h) => headers.indexOf(h);
+
+  const dateI = idx(map.dateCol);
+  const descI = idx(map.descCol);
+  const accountI = map.accountCol ? idx(map.accountCol) : -1;
+
+  const debitTokens = (map.debitTokens||[]).map(x=>String(x).trim().toLowerCase()).filter(Boolean);
+
+  const out = [];
+  for (const r of rows){
+    const iso = parseDateFlexible(r[dateI]);
+    if (!iso) continue;
+
+    const desc = String(r[descI]||"").trim();
+    const account = accountI>=0 ? String(r[accountI]||"").trim() : "";
+
+    let amt = 0;
+    if (map.mode === "signed"){
+      const aI = idx(map.amountCol);
+      amt = parseAmountFlexible(r[aI]);
+    } else if (map.mode === "debitcredit"){
+      const dI = idx(map.debitCol);
+      const cI = idx(map.creditCol);
+      const debit = parseAmountFlexible(r[dI]);
+      const credit = parseAmountFlexible(r[cI]);
+      amt = credit - debit;
+    } else if (map.mode === "amounttype"){
+      const aI = idx(map.amountCol);
+      const tI = idx(map.typeCol);
+      const raw = parseAmountFlexible(r[aI]);
+      const typ = String(r[tI]||"").trim().toLowerCase();
+      const isDebit = debitTokens.some(tok => typ.includes(tok));
+      amt = isDebit ? -Math.abs(raw) : Math.abs(raw);
+    }
+
+    const key = `${iso}|${amt.toFixed(2)}|${desc.toUpperCase().replace(/\s+/g," ").slice(0,80)}|${account.toUpperCase().slice(0,40)}`;
+    out.push({
+      id: hashStr(key),
+      date: iso,
+      description: desc,
+      amount: Number(amt.toFixed(2)),
+      account
+    });
+  }
+  return out;
+}
+
+// simple deterministic hash (non-crypto; OK for dedupe key)
+function hashStr(s){
+  let h = 2166136261;
+  for (let i=0;i<s.length;i++){
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return "tx_" + (h >>> 0).toString(16);
+}
+
+/* =========================================================
+   Statement import workflow
+   ========================================================= */
+let _csvCache = null; // { headers, rows, delimiter }
+
+function fillSelect(sel, headers){
+  sel.innerHTML = headers.map(h=>`<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`).join("");
+}
+function escapeHtml(s){
+  return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function buildMappingFromUI(headers){
+  const mode = el("mapAmountMode").value;
+
+  const map = {
+    headers,
+    delimiter: _csvCache.delimiter,
+    dateCol: el("mapDate").value,
+    descCol: el("mapDesc").value,
+    mode,
+    amountCol: el("mapAmount").value,
+    debitCol: el("mapDebit").value,
+    creditCol: el("mapCredit").value,
+    typeCol: el("mapType").value,
+    debitTokens: el("mapDebitTokens").value.split(",").map(x=>x.trim()).filter(Boolean),
+    accountCol: el("mapAccount").value || ""
   };
 
-  el("quizNext").onclick = ()=>{
-    const st = migrate(load() || defaultState());
-    if (!st.quiz.cur) startQuiz(st);
-    if (!commitQuiz(st)) return;
-    advance(st, false);
-    if (st.mode === "setup") renderQuiz(st);
+  if (mode === "signed"){
+    if (!map.amountCol) return { ok:false, msg:"Pick an Amount column." };
+  }
+  if (mode === "debitcredit"){
+    if (!map.debitCol || !map.creditCol) return { ok:false, msg:"Pick Debit and Credit columns." };
+  }
+  if (mode === "amounttype"){
+    if (!map.amountCol || !map.typeCol) return { ok:false, msg:"Pick Amount and Type columns." };
+  }
+
+  if (!map.dateCol || !map.descCol) return { ok:false, msg:"Pick Date and Description columns." };
+
+  return { ok:true, map };
+}
+
+function renderPreview(headers, dataRows){
+  const { ok, map, msg } = buildMappingFromUI(headers);
+  if (!ok){
+    el("previewTbody").innerHTML = "";
+    el("mapWarnings").textContent = msg || "";
+    return;
+  }
+
+  const preview = normalizeRows(dataRows.slice(0,200), map).slice(0,10);
+  el("previewTbody").innerHTML = preview.map(x=>`
+    <tr>
+      <td>${x.date}</td>
+      <td>${escapeHtml(x.description)}</td>
+      <td class="right">${fmtMoney(x.amount)}</td>
+      <td>${escapeHtml(x.account||"")}</td>
+    </tr>
+  `).join("");
+
+  // warnings: detect suspicious sign (all positive or all negative)
+  const s = preview.map(x=>x.amount);
+  const pos = s.filter(v=>v>0).length;
+  const neg = s.filter(v=>v<0).length;
+  const warn = [];
+  if (preview.length && (pos===0 || neg===0)){
+    warn.push("Preview amounts are one-sided (all + or all -). Verify amount/sign mapping.");
+  }
+  el("mapWarnings").textContent = warn.join(" ");
+}
+
+async function persistNormalizedTx(list){
+  // put each tx (dedupe by id)
+  const db = await idbOpen();
+  await new Promise((resolve, reject)=>{
+    const tx = db.transaction("tx", "readwrite");
+    const os = tx.objectStore("tx");
+    list.forEach(item => os.put(item));
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+
+  // update coverage meta
+  const count = await idbCount("tx");
+  const cov = await idbGetCoverage();
+  let days = 0;
+  if (cov.start && cov.end){
+    const a = parseISO(cov.start), b = parseISO(cov.end);
+    days = Math.floor((b - a)/(24*3600*1000)) + 1;
+  }
+  await idbPut("meta", { k:"coverage", v:{ ...cov, days, count, lastImportAt: new Date().toISOString() } });
+}
+
+async function refreshStatementStatus(){
+  const count = await idbCount("tx");
+  const covMeta = await idbGet("meta","coverage");
+  const v = covMeta?.v || { start:null, end:null, days:0, count:count, lastImportAt:null };
+
+  el("statementStatus").innerHTML = `
+    <b>On-device statements:</b> ${v.count || 0} tx
+    ${v.start && v.end ? ` • coverage ${v.start} → ${v.end} (${v.days} days)` : ""}
+    ${v.lastImportAt ? ` • last import ${new Date(v.lastImportAt).toLocaleString()}` : ""}
+  `;
+}
+
+/* =========================================================
+   Events / inputs
+   ========================================================= */
+function attachInputHandlers(){
+  document.body.addEventListener("input", (e)=>{
+    const t = e.target;
+    const p = loadProfile();
+
+    // Quick persistent defaults
+    if (t.id === "rentAmount") p.rent.amount = Number(t.value||0);
+    if (t.id === "rentDueDay") p.rent.dueDay = Number(t.value||28);
+    if (t.id === "note") p.quick.note = t.value || "";
+    if (t.id === "qcCashToday") p.quick.lastCashToday = Number(t.value||0);
+    if (t.id === "qcBufferFloor") p.quick.defaultBufferFloor = Number(t.value||0);
+    if (t.id === "qcHorizonDays") p.quick.defaultHorizonDays = Number(t.value||90);
+
+    // Profile tab fields
+    if (t.id === "profileDefaultHorizon") p.quick.defaultHorizonDays = Number(t.value||90);
+    if (t.id === "profileDefaultBuffer") p.quick.defaultBufferFloor = Number(t.value||0);
+    if (t.id === "profileSameDayOrder") p.quick.sameDayOrder = t.value;
+
+    // income edits
+    const incId = t.dataset.income;
+    if (incId){
+      const it = p.income.find(x=>x.id===incId);
+      if (it){
+        const k = t.dataset.k;
+        if (k==="label") it.label = t.value || "";
+        if (k==="lastPayDate") it.lastPayDate = t.value || "";
+        if (k==="everyDays") it.everyDays = Number(t.value||14);
+        if (k==="amount") it.amount = Number(t.value||0);
+      }
+    }
+
+    // debt edits
+    const debtId = t.dataset.debt;
+    if (debtId){
+      const d = p.debts.find(x=>x.id===debtId);
+      if (d){
+        const k = t.dataset.k;
+        if (k==="label") d.label = t.value || "";
+        if (k==="type") d.type = t.value || "cc";
+        if (k==="dueDay") d.dueDay = Number(t.value||1);
+        if (k==="balance") d.balance = Number(t.value||0);
+        if (k==="apr") d.apr = Number(t.value||0);
+        if (k==="creditLimit") d.creditLimit = Number(t.value||0);
+      }
+    }
+
+    // planned edits
+    const planId = t.dataset.planned;
+    if (planId){
+      const x = p.planned.find(z=>z.id===planId);
+      if (x){
+        const k = t.dataset.k;
+        if (k==="date") x.date = t.value || "";
+        if (k==="amount") x.amount = Number(t.value||0);
+        if (k==="label") x.label = t.value || "";
+      }
+    }
+
+    saveProfile(p);
+  });
+}
+
+/* =========================================================
+   Buttons
+   ========================================================= */
+function wireButtons(){
+  // add income/debt/planned
+  el("btnAddIncome").onclick = ()=>{
+    const p = loadProfile();
+    p.income.push({ id:uid(), label:"Income", lastPayDate:toISO(addDays(new Date(), -14)), everyDays:14, amount:0 });
+    saveProfile(p);
+    renderQuick(p);
   };
+  el("btnAddDebt").onclick = ()=>{
+    const p = loadProfile();
+    p.debts.push({ id:uid(), label:"Card/LOC", type:"cc", dueDay:1, balance:0, apr:0, creditLimit:0 });
+    saveProfile(p);
+    renderQuick(p);
+  };
+  el("btnAddPlanned").onclick = ()=>{
+    const p = loadProfile();
+    p.planned.push({ id:uid(), date:toISO(addDays(new Date(), 7)), amount:0, label:"Planned expense" });
+    saveProfile(p);
+    renderQuick(p);
+  };
+
+  // deletes
+  document.body.addEventListener("click",(e)=>{
+    const t = e.target;
+    const p = loadProfile();
+
+    if (t.dataset.delincome){
+      p.income = p.income.filter(x=>x.id!==t.dataset.delincome);
+      saveProfile(p); renderQuick(p);
+    }
+    if (t.dataset.deldebt){
+      p.debts = p.debts.filter(x=>x.id!==t.dataset.deldebt);
+      saveProfile(p); renderQuick(p);
+    }
+    if (t.dataset.delplanned){
+      p.planned = p.planned.filter(x=>x.id!==t.dataset.delplanned);
+      saveProfile(p); renderQuick(p);
+    }
+  });
 
   // compute
   el("btnCompute").onclick = ()=>{
-    const st = migrate(load() || defaultState());
-    st.shared.rentAmount = Number(el("rentAmount").value||0);
-    st.shared.cashBuffer = Number(el("cashBuffer").value||0);
-    st.shared.note = el("note").value || "";
-    save(st);
+    const p = loadProfile();
 
-    const model = compute(st);
-    renderResults(st, model);
-    showTab("results");
-  };
+    const cashToday = Number(el("qcCashToday").value||0);
+    const buffer = Number(el("qcBufferFloor").value||0);
+    const horizon = Number(el("qcHorizonDays").value||90);
 
-  // future add
-  el("btnAddFuture").onclick = ()=>{
-    const st = migrate(load() || defaultState());
-    const d = el("fDate").value;
-    const a = Number(el("fAmount").value||0);
-    const l = el("fLabel").value || "";
-    if (!d || !a) return;
-    st.future.push({ date:d, amount:a, label:l });
-    save(st);
-    el("fDate").value=""; el("fAmount").value=""; el("fLabel").value="";
-    boot();
-    showTab("future");
+    // persist last run cash
+    p.quick.lastCashToday = cashToday;
+    p.quick.defaultBufferFloor = buffer;
+    p.quick.defaultHorizonDays = horizon;
+
+    // rent persisted via input handler, but ensure sync
+    p.rent.amount = Number(el("rentAmount").value||0);
+    p.rent.dueDay = Number(el("rentDueDay").value||28);
+    p.quick.note = el("note").value || "";
+
+    saveProfile(p);
+
+    const model = runSimulation(p, cashToday, buffer, horizon);
+    renderAnchors(p, model);
+    renderDetails(model);
   };
 
   // details toggle
@@ -982,108 +1085,230 @@ function wireButtons(){
     el("btnToggleDetails").textContent = wrap.classList.contains("hidden") ? "Show details" : "Hide details";
   };
 
-  // export/import/reset
-  el("btnExport").onclick = ()=>{
-    const st = migrate(load() || defaultState());
-    const blob = new Blob([JSON.stringify(st,null,2)], {type:"application/json"});
+  // Export profile
+  el("btnExportProfile").onclick = async ()=>{
+    const p = loadProfile();
+    // also include coverage meta (not tx data)
+    const covMeta = await idbGet("meta","coverage");
+    p.coverage = covMeta?.v || p.coverage;
+
+    const blob = new Blob([JSON.stringify(p,null,2)], {type:"application/json"});
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "nextbill-backup.json";
+    a.download = "nextbill-profile.json";
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  el("importFile").addEventListener("change", async (e)=>{
+  // Import profile
+  el("importProfileFile").addEventListener("change", async (e)=>{
     const f = e.target.files?.[0];
     if (!f) return;
     const txt = await f.text();
-    const st = migrate(JSON.parse(txt));
-    save(st);
-    boot();
+    const p = migrateProfile(JSON.parse(txt));
+    saveProfile(p);
+    await boot();
     e.target.value = "";
   });
 
-  el("btnResetAll").onclick = ()=>{
-    if (!confirm("Delete local data on this device?")) return;
-    localStorage.removeItem(LS);
+  // Reset everything
+  el("btnResetAll").onclick = async ()=>{
+    if (!confirm("Delete ALL local app data on this device (profile + statements)?")) return;
+    localStorage.removeItem(LS_PROFILE);
+    await idbClear("tx");
+    await idbClear("meta");
     location.reload();
+  };
+
+  // CSV upload
+  el("csvFile").addEventListener("change", async (e)=>{
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const text = await f.text();
+
+    const delimiter = detectDelimiter(text);
+    const rawRows = parseCSV(text, delimiter);
+    if (rawRows.length < 2){
+      alert("CSV looks empty.");
+      e.target.value = "";
+      return;
+    }
+
+    const headers = rawRows[0].map(h=>String(h||"").trim());
+    const dataRows = rawRows.slice(1);
+
+    _csvCache = { headers, rows:dataRows, delimiter };
+
+    // populate wizard selects
+    fillSelect(el("mapDate"), headers);
+    fillSelect(el("mapDesc"), headers);
+    fillSelect(el("mapAmount"), headers);
+    fillSelect(el("mapDebit"), headers);
+    fillSelect(el("mapCredit"), headers);
+    fillSelect(el("mapType"), headers);
+
+    // account optional: include blank first
+    el("mapAccount").innerHTML = `<option value="">(none)</option>` + headers.map(h=>`<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`).join("");
+
+    // try auto-suggest
+    autoSuggestMapping(headers, dataRows);
+
+    el("mapWizard").classList.remove("hidden");
+    renderPreview(headers, dataRows);
+
+    e.target.value = "";
+  });
+
+  // mapping changes => re-preview
+  ["mapDate","mapDesc","mapAmountMode","mapAmount","mapDebit","mapCredit","mapType","mapDebitTokens","mapAccount"]
+    .forEach(id=>{
+      el(id).addEventListener("input", ()=>{
+        if (!_csvCache) return;
+        renderPreview(_csvCache.headers, _csvCache.rows);
+      });
+    });
+
+  // confirm mapping
+  el("btnConfirmMapping").onclick = async ()=>{
+    if (!_csvCache) return;
+    const p = loadProfile();
+    const { ok, map, msg } = buildMappingFromUI(_csvCache.headers);
+    if (!ok){
+      alert(msg || "Mapping incomplete.");
+      return;
+    }
+
+    // normalize
+    const normalized = normalizeRows(_csvCache.rows, map);
+    if (!normalized.length){
+      alert("No transactions parsed. Check date/amount mapping.");
+      return;
+    }
+
+    // persist normalized tx
+    await persistNormalizedTx(normalized);
+
+    // save mapping in profile
+    p.csvMapping = map;
+    saveProfile(p);
+
+    el("mapWizard").classList.add("hidden");
+    _csvCache = null;
+
+    await refreshStatementStatus();
+    await renderInsights(loadProfile());
+
+    alert(`Imported ${normalized.length} transactions (deduped by id).`);
+  };
+
+  // clear statements
+  el("btnClearStatements").onclick = async ()=>{
+    if (!confirm("Delete all on-device statement transactions?")) return;
+    await idbClear("tx");
+    await idbPut("meta", { k:"coverage", v:{ start:null, end:null, days:0, count:0, lastImportAt:null } });
+    await refreshStatementStatus();
+    await renderInsights(loadProfile());
   };
 }
 
-/* ---------- Theme/drawer ---------- */
-function mountTheme(){
-  el("btnTheme").addEventListener("click", ()=>{
-    const st = migrate(load() || defaultState());
-    const cur = document.documentElement.getAttribute("data-theme") || "dark";
-    const next = (cur === "dark") ? "light" : "dark";
-    document.documentElement.setAttribute("data-theme", next);
-    st.theme = next;
-    save(st);
+function autoSuggestMapping(headers, rows){
+  const hLower = headers.map(h=>h.toLowerCase());
+
+  // date: column with many parseable dates
+  const dateScores = headers.map((h, i)=>{
+    let ok=0, n=0;
+    for (const r of rows.slice(0,200)){
+      const v = parseDateFlexible(r[i]);
+      if (v) ok++;
+      n++;
+    }
+    return ok/n;
   });
-}
-function mountDrawer(){
-  const open = ()=>{ el("drawer").classList.remove("hidden"); el("backdrop").classList.remove("hidden"); };
-  const close = ()=>{ el("drawer").classList.add("hidden"); el("backdrop").classList.add("hidden"); };
-  el("btnSidebar").addEventListener("click", open);
-  el("btnCloseDrawer").addEventListener("click", close);
-  el("backdrop").addEventListener("click", close);
-}
+  let bestDate = 0;
+  for (let i=1;i<dateScores.length;i++) if (dateScores[i] > dateScores[bestDate]) bestDate = i;
 
-/* ---------- Boot ---------- */
-function boot(){
-  let st = migrate(load() || defaultState());
-  save(st);
+  // description: longest average string
+  const descScores = headers.map((h,i)=>{
+    let total=0, n=0;
+    for (const r of rows.slice(0,200)){
+      total += String(r[i]||"").length;
+      n++;
+    }
+    return total/(n||1);
+  });
+  let bestDesc = 0;
+  for (let i=1;i<descScores.length;i++) if (descScores[i] > descScores[bestDesc]) bestDesc = i;
 
-  document.documentElement.setAttribute("data-theme", st.theme || "dark");
+  el("mapDate").value = headers[bestDate];
+  el("mapDesc").value = headers[bestDesc];
 
-  renderToday(st);
-  renderFuture(st);
-  renderSettings(st);
+  // suggest amount column: numeric-heavy
+  const numScores = headers.map((h,i)=>{
+    let ok=0, n=0;
+    for (const r of rows.slice(0,200)){
+      const t = String(r[i]||"").replace(/[,$()\s]/g,"");
+      if (t === "") continue;
+      if (!isNaN(Number(t))) ok++;
+      n++;
+    }
+    return ok/(n||1);
+  });
+  let bestAmt = 0;
+  for (let i=1;i<numScores.length;i++) if (numScores[i] > numScores[bestAmt]) bestAmt = i;
+  el("mapAmount").value = headers[bestAmt];
 
-  const model = compute(st);
-  renderResults(st, model);
-
-  if (st.mode === "setup"){
-    el("tabBtnToday").disabled = true;
-    el("tabBtnFuture").disabled = true;
-    el("tabBtnResults").disabled = true;
-    el("tabBtnSettings").disabled = true;
-
-    showTab("setup");
-    if (!st.quiz.cur) startQuiz(st);
-    renderQuiz(st);
+  // debit/credit guess by header names
+  const debitIdx = hLower.findIndex(x=>x.includes("debit") || x==="dr");
+  const creditIdx = hLower.findIndex(x=>x.includes("credit") || x==="cr");
+  if (debitIdx>=0 && creditIdx>=0){
+    el("mapAmountMode").value = "debitcredit";
+    el("mapDebit").value = headers[debitIdx];
+    el("mapCredit").value = headers[creditIdx];
   } else {
-    el("tabBtnToday").disabled = false;
-    el("tabBtnFuture").disabled = false;
-    el("tabBtnResults").disabled = false;
-    el("tabBtnSettings").disabled = false;
-    showTab(st.shared.wantsFuture ? "future" : "results");
+    el("mapAmountMode").value = "signed";
   }
 
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./service-worker.js");
+  // type column guess
+  const typeIdx = hLower.findIndex(x=>x.includes("type"));
+  if (typeIdx>=0) el("mapType").value = headers[typeIdx];
+
+  // account column guess
+  const acctIdx = hLower.findIndex(x=>x.includes("account"));
+  if (acctIdx>=0) el("mapAccount").value = headers[acctIdx];
 }
 
-/* ---------- Init ---------- */
-(function init(){
+/* =========================================================
+   Boot
+   ========================================================= */
+async function boot(){
   // tabs
-  qsa(".seg button").forEach(btn=>{
-    btn.addEventListener("click", ()=> showTab(btn.dataset.tab));
-  });
-
+  mountTabs();
   mountDrawer();
   mountTheme();
   attachInputHandlers();
   wireButtons();
 
-  let st = migrate(load() || defaultState());
+  const p = loadProfile();
+  document.documentElement.setAttribute("data-theme", p.theme || "dark");
 
-  // If quiz is unfinished but mode is run, keep it run and clear quiz to avoid “stuck” feeling
-  if (st.mode === "run" && st.quiz && st.quiz.cur){
-    st.quiz.cur = null;
-    st.quiz.history = [];
-  }
-  save(st);
+  renderQuick(p);
+  renderProfile(p);
+  await refreshStatementStatus();
+  await renderInsights(p);
 
-  boot();
+  // initial compute (optional)
+  const cashToday = Number(el("qcCashToday").value||0);
+  const buffer = Number(el("qcBufferFloor").value||0);
+  const horizon = Number(el("qcHorizonDays").value||90);
+  const model = runSimulation(p, cashToday, buffer, horizon);
+  renderAnchors(p, model);
+  renderDetails(model);
+
+  // register SW
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./service-worker.js");
+}
+
+(async function init(){
+  await boot();
 })();

@@ -178,7 +178,6 @@ tr:last-child td{border-bottom:0}
 }
 .drawer-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
 .drawer-card{border:1px solid var(--stroke);border-radius:14px;padding:12px;background:rgba(255,255,255,.10);margin-bottom:12px}
-.adbox{border:1px dashed var(--stroke);border-radius:12px;padding:16px;text-align:center;color:var(--muted)}
 
 /* Quiz */
 .ios6-quiz{max-width:720px;margin:0 auto}
@@ -223,3 +222,34 @@ input, select, textarea, button {
 
 /* iOS Safari: prevent zoom layout glitches */
 input, select, textarea { font-size: 16px; }
+/* ===== Anchor Cards ===== */
+.anchor-grid{
+  display:grid;
+  grid-template-columns:repeat(2,1fr);
+  gap:12px;
+}
+@media(max-width:860px){.anchor-grid{grid-template-columns:1fr}}
+
+.anchor-card{
+  border:1px solid var(--stroke);
+  background: rgba(255,255,255,.12);
+  border-radius: var(--r2);
+  padding:12px;
+}
+.anchor-top{
+  display:flex; justify-content:space-between; gap:10px; align-items:flex-start;
+}
+.anchor-title{font-weight:990}
+.anchor-status{font-weight:990}
+.anchor-meta{margin-top:8px; font-size:12px; color:var(--muted); line-height:1.35}
+.anchor-action{margin-top:10px; font-weight:900; font-size:13px}
+.badge{
+  display:inline-block;
+  padding:4px 10px;
+  border-radius:999px;
+  border:1px solid var(--stroke);
+  font-size:12px;
+  font-weight:950;
+}
+.badge.good{color:var(--good)}
+.badge.bad{color:var(--bad)}
