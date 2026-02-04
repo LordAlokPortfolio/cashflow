@@ -108,31 +108,28 @@ async function idbGetCoverage(){
     const os = tx.objectStore("tx");
     const idx = os.index("byDate");
 
-    let first = null, last = null;
+    let first = null;
+    let last = null;
+    let sawAny = false;
 
-    // first
-    const req1 = idx.openCursor();
-    req1.onsuccess = () => {
-      const cur = req1.result;
+    idx.openCursor().onsuccess = (e) => {
+      const cur = e.target.result;
       if (cur){
-        first = cur.value.date;
-        cur.continue(); // keep going to find last
+        const d = cur.value.date;
+        if (!sawAny){
+          first = d;
+          sawAny = true;
+        }
+        last = d;
+        cur.continue();
       } else {
         resolve({ start:first, end:last });
       }
     };
-    req1.onerror = () => reject(req1.error);
-
-    // last: we can’t reverse easily without IDBKeyRange; so we compute last in req1 loop:
-    idx.openCursor().onsuccess = (e) => {
-      const cur = e.target.result;
-      if (cur){
-        last = cur.value.date;
-        cur.continue();
-      }
-    };
+    tx.onerror = () => reject(tx.error);
   });
 }
+
 
 /* =========================================================
    Profile (local)
@@ -424,31 +421,222 @@ function locCapacity(p){
   return { totalAvail, best: locs[0] || null };
 }
 
-function buildEvents(p, today, horizonDays){
+/* =========================================================
+   Statement Cycle Inference (universal) + Estimation
+   - Works per account label (AMEX / SCOTIA_CC / etc.)
+   - Uses dueDay as constraint + transaction sums per candidate closeDay
+   - Requires statements in IndexedDB
+   ========================================================= */
+
+async function idbGetTxByAccount(accountLabel){
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("tx", "readonly");
+    const os = tx.objectStore("tx");
+    const idx = os.index("byDate");
+    const out = [];
+    idx.openCursor().onsuccess = (e) => {
+      const cur = e.target.result;
+      if (!cur){ resolve(out); return; }
+      const v = cur.value;
+      if ((v.account || "").trim().toUpperCase() === accountLabel.trim().toUpperCase()){
+        out.push(v);
+      }
+      cur.continue();
+    };
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function dueDateFromClose(closeDate, dueDay){
+  // closeDate is a Date at statement close day; dueDay is day-of-month for due date
+  // Due date must be after close date:
+  // - if dueDay > close day => due in same month
+  // - else => due in next month
+  const y = closeDate.getFullYear();
+  const m = closeDate.getMonth();
+  const closeDay = closeDate.getDate();
+
+  if (dueDay > closeDay){
+    return new Date(y, m, Math.min(dueDay, dim(y,m)));
+  }
+  const nm = new Date(y, m+1, 1);
+  return new Date(nm.getFullYear(), nm.getMonth(), Math.min(dueDay, dim(nm.getFullYear(), nm.getMonth())));
+}
+
+function cycleWindowForClose(closeDate){
+  // window: (previous close + 1) to current close, inclusive
+  const end = new Date(closeDate);
+  end.setHours(0,0,0,0);
+
+  const y = end.getFullYear(), m = end.getMonth();
+  const closeDay = end.getDate();
+
+  // previous close is the same closeDay in the previous month (clamped by month length)
+  const prevMonth = new Date(y, m-1, 1);
+  const prevClose = new Date(
+    prevMonth.getFullYear(),
+    prevMonth.getMonth(),
+    Math.min(closeDay, dim(prevMonth.getFullYear(), prevMonth.getMonth()))
+  );
+  prevClose.setHours(0,0,0,0);
+
+  const start = addDays(prevClose, 1);
+  start.setHours(0,0,0,0);
+
+  return { start, end };
+}
+
+
+function sumCycleOwed(txs, start, end){
+  // Canonical: spending debits are negative, payments/refunds are positive.
+  // "Owed" as positive number ≈ -sum(amount) over cycle (ignore if negative).
+  let s = 0;
+  for (const t of txs){
+    const d = parseISO(t.date);
+    if (d < start || d > end) continue;
+    s += Number(t.amount || 0);
+  }
+  const owed = Math.max(0, -s);
+  return owed;
+}
+
+function findLikelyPaymentNear(txs, dueDate, windowDays=4){
+  // Find the largest positive credit near due date (typical CC payment)
+  const a = addDays(dueDate, -windowDays);
+  const b = addDays(dueDate, +windowDays);
+  let best = null;
+  for (const t of txs){
+    const d = parseISO(t.date);
+    if (d < a || d > b) continue;
+    const amt = Number(t.amount || 0);
+    if (amt <= 0) continue;
+    if (!best || amt > best.amount){
+      best = { date: t.date, amount: amt, desc: t.description || "" };
+    }
+  }
+  return best; // may be null
+}
+
+function candidateCloseDaysForDue(dueDay){
+  // Due date after close:
+  // valid closeDay is ANY 1..31; dueDay constrains month wrap logic but not a single set.
+  // We'll test all 1..31; scoring will pick the best.
+  const days = [];
+  for (let d=1; d<=31; d++) days.push(d);
+  return days;
+}
+
+async function inferCycleCloseDay({ accountLabel, dueDay, minCycles=2 }){
+  const txs = await idbGetTxByAccount(accountLabel);
+  if (!txs.length) return { ok:false, reason:"No transactions for account label.", closeDay:null, confidence:0 };
+
+  // coverage months based on tx dates
+  const dates = txs.map(t=>t.date).sort();
+  const startISO = dates[0], endISO = dates[dates.length-1];
+  const start = parseISO(startISO);
+  const end = parseISO(endISO);
+
+  // evaluate each candidate close day by how well cycle owed matches likely payment near due date
+  const candidates = candidateCloseDaysForDue(dueDay);
+  const scores = [];
+
+  for (const closeDay of candidates){
+    const errs = [];
+    const used = [];
+
+    // iterate months in range
+    let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+    cursor.setHours(0,0,0,0);
+
+    while (cursor <= end){
+      // close date for this month
+      const y = cursor.getFullYear(), m = cursor.getMonth();
+      const cDate = new Date(y, m, Math.min(closeDay, dim(y,m)));
+      if (cDate < start || cDate > end){ cursor = addMonths(cursor, 1); continue; }
+
+      const { start:ws, end:we } = cycleWindowForClose(cDate);
+      if (ws < start || we > end){ cursor = addMonths(cursor, 1); continue; }
+
+      const owed = sumCycleOwed(txs, ws, we);
+      const due = dueDateFromClose(cDate, dueDay);
+      const pay = findLikelyPaymentNear(txs, due, 4);
+
+      // If no payment found, skip scoring for that cycle (some users pay from another account/irregularly)
+      if (pay){
+        errs.push(Math.abs(owed - pay.amount));
+        used.push({ closeISO: toISO(cDate), owed, pay: pay.amount, payDate: pay.date });
+      }
+
+      cursor = addMonths(cursor, 1);
+    }
+
+    if (errs.length >= minCycles){
+      // robust: median error
+      const sorted = errs.slice().sort((a,b)=>a-b);
+      const mid = Math.floor(sorted.length/2);
+      const median = (sorted.length % 2) ? sorted[mid] : (sorted[mid-1]+sorted[mid])/2;
+      scores.push({ closeDay, medianError: median, cycles: errs.length, samples: used });
+    }
+  }
+
+  if (!scores.length){
+    return { ok:false, reason:"Not enough cycles with identifiable payments to infer reliably.", closeDay:null, confidence:0 };
+  }
+
+  scores.sort((a,b)=>a.medianError - b.medianError);
+  const best = scores[0];
+  const runnerUp = scores[1] || null;
+
+  // confidence heuristic: better if many cycles and large gap to runner-up
+  const gap = runnerUp ? (runnerUp.medianError - best.medianError) : best.medianError;
+  const confidence =
+    clamp(
+      (best.cycles / 6) * 0.6 + (gap > 50 ? 0.4 : gap/50 * 0.4),
+      0, 1
+    );
+
+  return {
+    ok:true,
+    closeDay: best.closeDay,
+    confidence,
+    basis: { cycles: best.cycles, medianError: best.medianError, examples: best.samples.slice(0,3) }
+  };
+}
+
+async function estimateNextStatementOwed({ accountLabel, closeDay, forCloseISO }){
+  const txs = await idbGetTxByAccount(accountLabel);
+  const closeDate = parseISO(forCloseISO);
+  const { start, end } = cycleWindowForClose(closeDate);
+  const owed = sumCycleOwed(txs, start, end);
+  return { owed, windowStart: toISO(start), windowEnd: toISO(end) };
+}
+
+
+function runSimulationWithEstimates(p, cashStart, bufferFloor, horizonDays, statementEstimates){
+  const today = new Date(); today.setHours(0,0,0,0);
   const end = addDays(today, horizonDays);
+
   const events = [];
   const warnings = [];
 
-  // incomes: recurring by each stream
+  // incomes (same as before)
   (p.income||[]).forEach(inc=>{
     const lp = parseISO(inc.lastPayDate);
     const every = Number(inc.everyDays||14);
     const amt = Number(inc.amount||0);
     if (!lp){ warnings.push(`${inc.label||"Income"}: missing last pay date`); return; }
     if (!every || every < 1){ warnings.push(`${inc.label||"Income"}: invalid cadence`); return; }
-    if (!amt){ warnings.push(`${inc.label||"Income"}: amount is 0`); }
 
-    // next pay after today
     let d = new Date(lp);
     while (d <= today) d = addDays(d, every);
-
     while (d <= end){
       events.push({ date: toISO(d), name: `${inc.label||"Income"} pay`, inflow: amt, outflow: 0 });
       d = addDays(d, every);
     }
   });
 
-  // rent: monthly recurring within horizon (if configured)
+  // rent recurring
   const rentAmt = Number(p.rent?.amount||0);
   const rentDay = Number(p.rent?.dueDay||0);
   if (rentAmt > 0 && rentDay >= 1){
@@ -459,28 +647,52 @@ function buildEvents(p, today, horizonDays){
     }
   }
 
-  // debts: monthly recurring within horizon
+  // debts
   (p.debts||[]).forEach(d=>{
     const dueDay = Number(d.dueDay||0);
-    const bal = Number(d.balance||0);
-    if (!dueDay || dueDay < 1) return;
-    if (bal <= 0) return;
+    if (!dueDay) return;
 
-    let due = nextDueByDay(today, dueDay);
-    while (due && due <= end){
-      if (d.type === "cc"){
-        events.push({ date: toISO(due), name: `${d.label} (CC full)`, inflow: 0, outflow: bal, debtId:d.id });
+    const nextDue = nextDueByDay(today, dueDay);
+    if (!nextDue) return;
+
+    const bal = Number(d.balance||0);
+
+    if (d.type === "cc"){
+      // 1) Pay the CURRENT statement ONCE on next due
+      if (bal > 0){
+        events.push({ date: toISO(nextDue), name: `${d.label} (CC current statement)`, inflow: 0, outflow: bal, debtId:d.id });
+      }
+
+      // 2) Future statements: use CSV estimates if available
+      const est = statementEstimates?.[d.id];
+      if (est && est.byDueISO){
+        let dueCursor = addMonths(nextDue, 1);
+        while (dueCursor <= end){
+          const dueISO = toISO(dueCursor);
+          const owed = Number(est.byDueISO[dueISO] || 0);
+          events.push({ date: dueISO, name: `${d.label} (CC estimated statement)`, inflow: 0, outflow: owed, debtId:d.id });
+          dueCursor = addMonths(dueCursor, 1);
+        }
       } else {
+        // If no estimates, do NOT repeat anything
+        warnings.push(`${d.label}: future CC statements not estimated (no statement history / no inferred cycle).`);
+      }
+
+    } else {
+      // LOC minimum recurring (keep old approximation)
+      if (bal <= 0) return;
+      let due = nextDue;
+      while (due && due <= end){
         const apr = Number(d.apr||0);
         const minPay = apr > 0 ? (bal * (apr/100) / 12) : 0;
         if (apr <= 0) warnings.push(`${d.label}: LOC APR is 0 → minimum assumed 0`);
         events.push({ date: toISO(due), name: `${d.label} (LOC minimum)`, inflow: 0, outflow: minPay, debtId:d.id });
+        due = addMonths(due, 1);
       }
-      due = addMonths(due, 1);
     }
   });
 
-  // planned (one-time)
+  // planned
   (p.planned||[]).forEach(x=>{
     if (x?.date && Number(x.amount||0) !== 0){
       const d = parseISO(x.date);
@@ -490,43 +702,35 @@ function buildEvents(p, today, horizonDays){
     }
   });
 
-  // sort by date, then same-day ordering
+  // same-day ordering
   events.sort((a,b)=>{
     if (a.date !== b.date) return a.date.localeCompare(b.date);
     if ((p.quick.sameDayOrder||"expensesFirst") === "expensesFirst"){
-      // outflow first (conservative)
       if ((a.outflow||0) !== (b.outflow||0)) return (b.outflow||0) - (a.outflow||0);
       return (b.inflow||0) - (a.inflow||0);
     } else {
-      // income first
       if ((a.inflow||0) !== (b.inflow||0)) return (b.inflow||0) - (a.inflow||0);
       return (b.outflow||0) - (a.outflow||0);
     }
   });
 
-  return { events, warnings };
-}
-
-function runSimulation(p, cashStart, bufferFloor, horizonDays){
-  const today = new Date(); today.setHours(0,0,0,0);
-  const { events, warnings } = buildEvents(p, today, horizonDays);
-
-  let bal = Number(cashStart||0);
-  let minBal = bal;
+  // run
+  let balNow = Number(cashStart||0);
+  let minBal = balNow;
   let minDate = toISO(today);
   let firstBreach = null;
 
   const rows = [];
   for (const e of events){
-    bal = bal + (e.inflow||0) - (e.outflow||0);
-    rows.push({ ...e, balance: bal });
+    balNow = balNow + (e.inflow||0) - (e.outflow||0);
+    rows.push({ ...e, balance: balNow });
 
-    if (bal < minBal){
-      minBal = bal;
+    if (balNow < minBal){
+      minBal = balNow;
       minDate = e.date;
     }
-    if (!firstBreach && bal < bufferFloor){
-      firstBreach = { ...e, balance: bal };
+    if (!firstBreach && balNow < bufferFloor){
+      firstBreach = { ...e, balance: balNow };
     }
   }
 
@@ -542,6 +746,7 @@ function runSimulation(p, cashStart, bufferFloor, horizonDays){
     warnings
   };
 }
+
 
 function anchorWindows(p){
   // anchors: rent + each debt next due date (single next due)
@@ -795,7 +1000,8 @@ function normalizeRows(rows, map){
     if (!iso) continue;
 
     const desc = String(r[descI]||"").trim();
-    const account = accountI>=0 ? String(r[accountI]||"").trim() : "";
+    let account = accountI>=0 ? String(r[accountI]||"").trim() : "";
+    if (!account && map.fileAccountLabel) account = map.fileAccountLabel;
 
     let amt = 0;
     if (map.mode === "signed"){
@@ -864,8 +1070,10 @@ function buildMappingFromUI(headers){
     creditCol: el("mapCredit").value,
     typeCol: el("mapType").value,
     debitTokens: el("mapDebitTokens").value.split(",").map(x=>x.trim()).filter(Boolean),
-    accountCol: el("mapAccount").value || ""
+    accountCol: el("mapAccount").value || "",
+    fileAccountLabel: (el("mapFileAccountLabel")?.value || "").trim()
   };
+
 
   if (mode === "signed"){
     if (!map.amountCol) return { ok:false, msg:"Pick an Amount column." };
@@ -1054,29 +1262,104 @@ function wireButtons(){
   });
 
   // compute
-  el("btnCompute").onclick = ()=>{
-    const p = loadProfile();
+el("btnCompute").onclick = async ()=>{
+  const p = loadProfile();
 
-    const cashToday = Number(el("qcCashToday").value||0);
-    const buffer = Number(el("qcBufferFloor").value||0);
-    const horizon = Number(el("qcHorizonDays").value||90);
+  const cashToday = Number(el("qcCashToday").value||0);
+  const buffer = Number(el("qcBufferFloor").value||0);
+  const horizon = Number(el("qcHorizonDays").value||90);
 
-    // persist last run cash
-    p.quick.lastCashToday = cashToday;
-    p.quick.defaultBufferFloor = buffer;
-    p.quick.defaultHorizonDays = horizon;
+  // persist last run cash
+  p.quick.lastCashToday = cashToday;
+  p.quick.defaultBufferFloor = buffer;
+  p.quick.defaultHorizonDays = horizon;
 
-    // rent persisted via input handler, but ensure sync
-    p.rent.amount = Number(el("rentAmount").value||0);
-    p.rent.dueDay = Number(el("rentDueDay").value||28);
-    p.quick.note = el("note").value || "";
+  // rent sync
+  p.rent.amount = Number(el("rentAmount").value||0);
+  p.rent.dueDay = Number(el("rentDueDay").value||28);
+  p.quick.note = el("note").value || "";
+  saveProfile(p);
 
-    saveProfile(p);
+  // --- NEW: infer cycles + build future CC estimates if statements exist ---
+  const statementEstimates = {}; 
+  // statementEstimates[debtId] = { closeDay, confidence, byDueISO: { "2026-03-16": amount, ... } }
 
-    const model = runSimulation(p, cashToday, buffer, horizon);
-    renderAnchors(p, model);
-    renderDetails(model);
-  };
+  for (const d of (p.debts||[])){
+    if (d.type !== "cc") continue;
+
+    // You must set d.accountLabel manually for now by matching your CSV label to this debt label.
+    // Minimal universal approach: try to use debt label as account label if user typed "AMEX", "SCOTIA_CC", etc.
+    const accountLabel = (d.accountLabel || d.label || "").trim();
+    if (!accountLabel) continue;
+
+    // Infer closeDay if not set
+    let closeDay = Number(d.cycleCloseDay || 0);
+    let confidence = 0;
+
+    if (!closeDay){
+      const inf = await inferCycleCloseDay({ accountLabel, dueDay: Number(d.dueDay||0) });
+      if (inf.ok){
+        closeDay = inf.closeDay;
+        confidence = inf.confidence;
+
+        // Store inferred value into profile so it becomes “confirmed” after user sees it (you can add UI later).
+        d.cycleCloseDay = closeDay;
+        d.cycleConfidence = confidence;
+        d.accountLabel = accountLabel;
+        saveProfile(p);
+      }
+    } else {
+      confidence = Number(d.cycleConfidence||0);
+    }
+
+    if (!closeDay) continue;
+
+    // Build estimates for due dates inside horizon AFTER the first due
+    const today = new Date(); today.setHours(0,0,0,0);
+    const end = addDays(today, horizon);
+
+    const nextDue = nextDueByDay(today, Number(d.dueDay||0));
+    if (!nextDue) continue;
+
+    const byDueISO = {};
+    // future due dates start from the month after nextDue
+    let dueCursor = addMonths(nextDue, 1);
+
+    while (dueCursor <= end){
+      // Determine which statement close produces this due.
+      // We generate the statement close date that precedes this due by rule:
+      // close date is (due month - maybe same/prev month) at closeDay, but due is always after close:
+      // So close is in same month if dueDay > closeDay else previous month.
+      const y = dueCursor.getFullYear();
+      const m = dueCursor.getMonth();
+
+      let closeDate;
+      if (Number(d.dueDay||0) > closeDay){
+        // due in same month as close
+        closeDate = new Date(y, m, Math.min(closeDay, dim(y,m)));
+      } else {
+        // due in month after close -> close is previous month
+        const prevM = new Date(y, m-1, 1);
+        closeDate = new Date(prevM.getFullYear(), prevM.getMonth(), Math.min(closeDay, dim(prevM.getFullYear(), prevM.getMonth())));
+      }
+
+      const closeISO = toISO(closeDate);
+      const est = await estimateNextStatementOwed({ accountLabel, closeDay, forCloseISO: closeISO });
+      byDueISO[toISO(dueCursor)] = est.owed;
+
+      dueCursor = addMonths(dueCursor, 1);
+    }
+
+    statementEstimates[d.id] = { closeDay, confidence, byDueISO };
+  }
+
+  // --- RUN simulation with estimates ---
+  const model = runSimulationWithEstimates(p, cashToday, buffer, horizon, statementEstimates);
+
+  renderAnchors(p, model);
+  renderDetails(model);
+};
+
 
   // details toggle
   el("btnToggleDetails").onclick = ()=>{
@@ -1161,7 +1444,7 @@ function wireButtons(){
   });
 
   // mapping changes => re-preview
-  ["mapDate","mapDesc","mapAmountMode","mapAmount","mapDebit","mapCredit","mapType","mapDebitTokens","mapAccount"]
+  ["mapDate","mapDesc","mapAmountMode","mapAmount","mapDebit","mapCredit","mapType","mapDebitTokens","mapAccount","mapFileAccountLabel"]
     .forEach(id=>{
       el(id).addEventListener("input", ()=>{
         if (!_csvCache) return;
@@ -1301,7 +1584,7 @@ async function boot(){
   const cashToday = Number(el("qcCashToday").value||0);
   const buffer = Number(el("qcBufferFloor").value||0);
   const horizon = Number(el("qcHorizonDays").value||90);
-  const model = runSimulation(p, cashToday, buffer, horizon);
+  const model = runSimulationWithEstimates(p, cashToday, buffer, horizon, {});
   renderAnchors(p, model);
   renderDetails(model);
 
